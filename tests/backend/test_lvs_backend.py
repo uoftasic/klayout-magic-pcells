@@ -176,6 +176,16 @@ def texts_only(src, dst, top):
     ly.write(dst, o)
 
 
+def _ports(spice, name):
+    """The pins of ``.subckt name`` in a SPICE file."""
+    with open(spice, encoding="utf-8") as f:
+        for line in f:
+            t = line.split()
+            if len(t) > 2 and t[0].lower() == ".subckt" and t[1] == name:
+                return [x for x in t[2:] if "=" not in x]
+    return []
+
+
 @needs_netgen
 class LvsTest(unittest.TestCase):
     def test_hand_inverter_matches(self):
@@ -222,6 +232,10 @@ class LvsTest(unittest.TestCase):
         self.assertTrue(out.verdict.pin_errors, out.verdict)
         self.assertIn("Top level cell failed pin matching.", out.verdict.final)
         self.assertTrue([f for f in out.findings if f["category"] == lvsjob_cat("CAT_PINS")])
+        # Every schematic pin has an item, also the one on netgen's "(no pins)" row.
+        texts = " ".join(f["text"] for f in out.findings if f["category"] == lvsjob_cat("CAT_PINS"))
+        for pin in _ports(sch, top):
+            self.assertIn("schematic pin %s has no pin in the layout" % pin, texts)
 
     def test_swapped_texts_fail(self):
         path, sch, top = case_paths("inv_swap")

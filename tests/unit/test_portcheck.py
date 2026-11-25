@@ -8,7 +8,7 @@ import unittest
 from tests.unit._util import needs_klayout, db  # noqa: F401
 
 if db is not None:
-    from klayout_magic_pcells import portcheck, pdkdata
+    from klayout_magic_pcells import markers, portcheck, pdkdata
 
 # Per PDK: a conductor's drawing, its text and pin layers, the form both
 # tools accept, and a text layer neither reads (design-0.6.md 3.4; the data
@@ -93,6 +93,31 @@ class Conventions(unittest.TestCase):
             ly, top = layout([(f["draw"], BOX), (f["pin"], PINBOX)])
             self.assertEqual(checks(pdk, ly, top), ["P4"])
 
+    def test_foundry_cell_texts_and_pin_boxes(self):
+        """sky130_fd_sc_hd__inv_1 as the foundry draws it: the cell's name on
+        text.drawing (83/44), which Magic reads as a comment that names no
+        net, and VNB on pwell.label (64/59) over a pwell.pin (122/16) box,
+        the form both tools accept. Neither is a finding."""
+        ly, top = layout([((64, 20), (-0.19, 1.305, 1.57, 2.91)), ((122, 16), (0.145, -0.085, 0.315, 0.085))],
+                         [((83, 44), "inv_1", 0.0, 0.0), ((64, 59), "VNB", 0.23, 0.0)])
+        self.assertEqual(checks("sky130A", ly, top), [])
+        # Without its text the pwell.pin box is a P4 again.
+        ly, top = layout([((122, 16), (0.145, -0.085, 0.315, 0.085))], [])
+        self.assertEqual(checks("sky130A", ly, top), ["P4"])
+        # IHP's TEXT.drawing (63/0) is a comment to Magic too.
+        f = FORMS["ihp-sg13g2"]
+        ly, top = layout([(f["draw"], BOX)], [((63, 0), "sub!", 0.3, 0.3)])
+        self.assertEqual(checks("ihp-sg13g2", ly, top), [])
+
+    def test_headline(self):
+        """The GUI message's first line names the texts in plain words."""
+        f = FORMS["sky130A"]
+        ly, top = layout([(f["draw"], BOX)], [(f["text"], "A", 0.3, 0.3), (f["text"], "Y", 0.6, 0.6)])
+        found = portcheck.check_layout(ly, top, pdkdata.load("sky130A"))
+        self.assertEqual(portcheck.headline(found, "TOP"),
+                         "In TOP: 2 texts that name nets in Magic but make no pins (A, Y).")
+        self.assertEqual(portcheck.headline([], "TOP"), "No port findings in TOP.")
+
     def test_p5_a_pin_box_without_drawing(self):
         for pdk in ("sky130A", "ihp-sg13g2", "ihp-sg13cmos5l"):
             f = FORMS[pdk]
@@ -175,7 +200,7 @@ class Prepare(unittest.TestCase):
         self.assertTrue(o.summary.startswith("ports: "), o.summary)
         self.assertIn(text, o.summary)
         self.assertEqual(o.rdb.count("Job/failed"), 1)
-        said = [v.string() for it in o.rdb.db.each_item() for v in it.each_value() if v.is_string()]
+        said = [markers.item_text(it) for it in o.rdb.db.each_item()]
         self.assertTrue(any(text in s for s in said), said)
         return o
 

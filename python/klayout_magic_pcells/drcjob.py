@@ -10,8 +10,9 @@ Two modes (design-0.6.md 3.1; 6.1 says why hierarchical is the default):
 - **hierarchical** (the default): the export keeps the hierarchy, Magic
   reads it with a plain ``gds read``, and every cell definition is checked
   as the edit cell, children first, then the top cell. Each cell's errors
-  are in that cell's coordinates and go into its own RDB cell. A box listed
-  under a parent that equals a box of one of its subcells, seen through the
+  are in that cell's coordinates and go into its own RDB cell. The top
+  cell keeps every box of its own check. Below it, a box listed under a
+  parent that equals a box of one of its subcells, seen through the
   instance, is dropped from the parent (the copy drop, design-0.6.md 3.1):
   the parent's check lists most of the subcells' errors again.
 
@@ -20,13 +21,16 @@ Two modes (design-0.6.md 3.1; 6.1 says why hierarchical is the default):
   that Magic's check from the top cell misses although they are real (the
   case suite's sheet, design-0.6.md 3.1). So every box of a cell other than
   the top is classified (``classify``): (a) the top cell's listing has a
-  box of its rule there,
-  through some placement: an error; (b) else, when Magic's check of the
-  flattened layout has one there: an error, and its text says so; (c) else
-  information only, in the category "only when <cell> is checked on its
-  own" under the rule, not counted in the exit status or the error count.
-  The flattened check is one more job (flat mode's options, on the export
-  read back and flattened), run only when some box is not (a).
+  box of its rule there, through some placement: the top cell's box
+  reports it, and the subcell's is left out; (b) else, when Magic's check
+  of the flattened layout has one there: an error in the subcell, and its
+  text says so; (c) else information only, in the category "only when
+  <cell> is checked on its own" under the rule, not counted in the exit
+  status or the error count. The flattened check is one more job (flat
+  mode's options, on the export read back and flattened), run only when
+  some box is not (a). The top cell keeps every box of its own check,
+  so a tap that the top cell lacks gives its errors there (design-0.6.md
+  3.1).
 - **flat**: Magic's verdict on the flattened mask. The export flattens the
   cell and Magic checks that one cell.
 
@@ -208,9 +212,10 @@ class Error:
         return "Error(%r, %r, %r)" % (self.cell, self.why, self.box)
 
 
-def dedup(raw, children, order):
+def dedup(raw, children, order, keep=()):
     """The copy drop: drop from each cell the boxes that equal a box of one of its
-    subcells (at any depth), seen through the instances.
+    subcells (at any depth), seen through the instances. The cells in ``keep``
+    (the top cell) keep all their boxes.
 
     ``raw``: {cell: [Error]}; ``children``: {cell: [(child, Xf)]}, one entry
     per placement; ``order``: every cell, children before parents. Returns
@@ -224,7 +229,7 @@ def dedup(raw, children, order):
             for why, box in full.get(ch, ()):
                 below.add((why, xf.box(box)))
         mine = raw.get(c, [])
-        k = [e for e in mine if e.key() not in below]
+        k = list(mine) if c in keep else [e for e in mine if e.key() not in below]
         dropped += len(mine) - len(k)
         kept[c] = k
         full[c] = below | {e.key() for e in mine}
@@ -258,8 +263,8 @@ def in_area(errors_by_cell, places, area):
 # example a met1 area error on a pad that the parent's metal joins, and boxes
 # that Magic's check from the top cell misses although they are real. So each
 # box of a cell other than the top is classified:
-TOP = "top"              # a box of the top cell's own check (after the copy drop)
-IN_TOP = "in top"        # (a) the top cell's check lists it too: an error
+TOP = "top"              # a box of the top cell's own check
+IN_TOP = "in top"        # (a) the top cell's check lists it too: the top's box reports it
 FLAT_ONLY = "flat only"  # (b) only the flattened layout's check confirms it: an error
 ALONE = "alone"          # (c) neither does: information, not an error
 
@@ -271,7 +276,8 @@ class BoxIndex:
     (sky130A diff/tap.10: 21 boxes from the top, 17 from the cells;
     design-0.6.md 3.1), so a box counts as listed when a box of its rule
     meets it, not only when one equals it. Touching is enough: in doubt, a
-    box stays an error."""
+    subcell's box counts as listed, and the top cell's box that touches it
+    stays in the report."""
 
     STEP = 5000
     SPAN = 64        # boxes wider than this many steps are kept in a list
@@ -700,11 +706,41 @@ def drc_styles(data):
 
 # -- the task ---------------------------------------------------------------------
 
+def _n(n, one, many):
+    return "%d %s" % (n, one if n == 1 else many)
+
+
+def headline(rows, n_alone, what, area=False, nothing=False):
+    """The first line of the GUI's result message, in plain words: the error
+    markers per rule (``rows``: (cell, why, box)), or that there are none.
+    ``n_alone``: the boxes that are information only; ``area``: an area
+    check; ``nothing``: Magic reads nothing in the cells asked for."""
+    if nothing:
+        return "Magic reads nothing in %s, so Magic DRC checked nothing." % what
+    where = ("in the checked area of %s" if area else "in %s") % what
+    if not rows:
+        s = "No DRC errors %s." % where
+        if n_alone:
+            s += " %s information only." % _n(n_alone, "marker is", "markers are")
+        return s
+    per = {}
+    for _c, why, _b in rows:
+        per[rule_id(why)] = per.get(rule_id(why), 0) + 1
+    head = "%s %s" % (_n(len(rows), "DRC error marker", "DRC error markers"), where)
+    if len(per) == 1:
+        return "%s, rule %s." % (head, next(iter(per)))
+    top = sorted(per.items(), key=lambda kv: (-kv[1], kv[0]))
+    listed = ", ".join("%s %d" % kv for kv in top[:6])
+    more = len(top) - 6
+    return "%s, %d rules: %s%s." % (head, len(per), listed, " and %d more" % more if more > 0 else "")
+
+
 class Outcome:
     def __init__(self, status, rdb, summary, files=None):
         self.status = status
         self.rdb = rdb
         self.summary = summary
+        self.headline = None    # the GUI message's plain first line
         self.files = files or {}
         self.rows = []          # (KLayout cell, why, (l, b, r, t) nm): the errors kept
         self.raw = {}           # {checked cell: {file cell name: [Error]}}, before the copy drop and the area
@@ -850,7 +886,7 @@ class Task:
         the unit's batches are all in."""
         if u.hier is None:
             children, bottom_up = _children(u.back, u.er.top)
-            kept, dropped = dedup(u.raw, children, bottom_up)
+            kept, dropped = dedup(u.raw, children, bottom_up, keep=(u.er.top,))
             places = placements(children, u.er.top, bottom_up)
             if self.options.get("box"):
                 kept = in_area(kept, places, area_nm(self.options["box"]))
@@ -1077,10 +1113,13 @@ class Task:
                     if cls != ALONE and e.why not in made:
                         made.add(e.why)
                         rdb.category(category_path(e.why), info.description())
+                    if cls == IN_TOP:
+                        # The top cell's own check lists this box: its box there reports it.
+                        continue
                     if cls == ALONE:
                         cat = alone_category(e.why, kname)
                         rdb.category(cat, "%s\nCell %s, in the top cell %s." % (ALONE_NOTE, kname, u.name))
-                        rdb.item(cat, kname, _dbox(e.box), "%s; information only" % info.item_text())
+                        rdb.item(cat, kname, _dbox(e.box), "%s; information only" % info.item_text(), info=True)
                         out.alone.append((kname, e.why, e.box))
                         continue
                     text = info.item_text()
@@ -1105,9 +1144,9 @@ class Task:
                        if len(u.counts) > 1 else ""))
             sub = counts[IN_TOP] + counts[FLAT_ONLY] + counts[ALONE]
             if hier and sub:
-                line += ("; of the %d box%s the subcells' own checks list, %d %s in the top cell's check, "
-                         "%d only in the flattened layout's check, %d only when the subcell is checked on "
-                         "its own (information, not counted)"
+                line += ("; of the %d box%s the subcells' own checks list, %d %s in the top cell's check "
+                         "(reported there), %d only in the flattened layout's check, %d only when the subcell "
+                         "is checked on its own (information, not counted)"
                          % (sub, "" if sub == 1 else "es", counts[IN_TOP], "is" if counts[IN_TOP] == 1 else "are",
                             counts[FLAT_ONLY], counts[ALONE]))
             lines.append(line)
@@ -1149,6 +1188,8 @@ class Task:
             out.summary = "Magic DRC (%s, %s) of %s on %s%s: %s." % (style, mode, what, self.cfg.pdk, area_text, head)
             if lines and n_empty < len(self.units):
                 out.summary += " %s." % "; ".join(lines)
+            out.headline = headline(out.rows, len(out.alone), what, area is not None,
+                                    nothing=n_empty == len(self.units))
             # The reads-nothing item is under Export too; the head names it.
             export_n = rdb.count(CAT_EXPORT) - rdb.count(markers.CAT_READS_NOTHING)
             if export_n:
@@ -1287,8 +1328,10 @@ def _description(cfg, data, opts, units, lines, error):
                        + "; job directory %s%s" % (u.flat_dir, _gone_note(u.flat_dir)))
     if error:
         out.append("Failed: %s" % error)
-    out.append("Command: %s" % command_line(opts, [u.name for u in units]))
-    return "\n".join(out)
+    out.append("Command: %s" % command_line(opts, [u.name for u in units], cfg.pdk if cfg else None))
+    # One line: KLayout's browser lists a database as "<name> (<description>)" and
+    # writes a line break there as a literal \n.
+    return " ".join(ln if ln.endswith(".") else ln + "." for ln in out[:-1]) + " " + out[-1]
 
 
 def _quote_sh(s):
@@ -1296,10 +1339,12 @@ def _quote_sh(s):
     return s if re.match(r"^[A-Za-z0-9_./=,:+-]+$", s) else "'" + s.replace("'", "'\\''") + "'"
 
 
-def command_line(opts, cells):
+def command_line(opts, cells, pdk=None):
     parts = ["python3", "-m", "klayout_magic_pcells", "drc", _quote_sh(opts.get("file") or "FILE")]
     for c in cells:
         parts += ["--cell", _quote_sh(c)]
+    if pdk:
+        parts += ["--pdk", _quote_sh(pdk)]
     parts += ["--style", _quote_sh(opts["style"]), "--mode", opts["mode"]]
     if opts.get("box"):
         parts += ["--box", ",".join(fmt_um(v) for v in area_nm(opts["box"]))]

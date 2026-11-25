@@ -88,13 +88,35 @@ _DIFF = re.compile(r"(dif|^n?p?sd|^ppd|^npd|tap|^nd|^pd)", re.I)
 
 
 class Outcome:
-    def __init__(self, status, rdb, summary, files=None, verdict=None, findings=None):
+    def __init__(self, status, rdb, summary, files=None, verdict=None, findings=None, headline=None):
         self.status = status
         self.rdb = rdb
         self.summary = summary
+        self.headline = headline         # the GUI message's plain first line
         self.files = files or {}
         self.verdict = verdict
         self.findings = findings or []   # [{"category", "cell", "text", "box"}]
+
+
+def lvs_headline(cell, subckt, schematic, matched, findings):
+    """The first line of the GUI's LVS message, in plain words: match or
+    not, and the report's markers per category."""
+    against = "%s in %s" % (subckt, os.path.basename(schematic or ""))
+    if matched:
+        return "%s matches %s." % (cell, against)
+    per = []
+    for f in findings:
+        cat = f["category"].split("/", 1)[-1]
+        for i, (c, n) in enumerate(per):
+            if c == cat:
+                per[i] = (c, n + 1)
+                break
+        else:
+            per.append((cat, 1))
+    s = "%s does not match %s." % (cell, against)
+    if per:
+        s += " The report marks %s." % ", ".join("%s: %d" % cn for cn in per)
+    return s
 
 
 def readback(pdk):
@@ -401,7 +423,7 @@ class Task:
         n_readback = self._mark_readback(rdb, findings)
         if self.job_options.get("makeall"):
             rdb.info(rdb.category(CAT_PORTS_FROM_LABELS, _DESCRIPTIONS[CAT_PORTS_FROM_LABELS]),
-                     "port makeall made %d ports in %s" % (len(ext.ports()), self.export.top))
+                     "port makeall made %d ports in %s" % (len(ext.ports()), self.export.top), info=True)
         self.ext = ext
         if self.cmd == "extract":
             # Only devices the netlist misses count as findings of the
@@ -417,7 +439,11 @@ class Task:
                             % (n_readback, "" if n_readback == 1 else "s"))
             if n_export:
                 summary += " The report has %d item%s about the export." % (n_export, "" if n_export == 1 else "s")
-            self._outcome = Outcome(status, rdb, summary, files, findings=findings)
+            head = "Magic extracted %s (%s)." % (self.export.klayout_top, kind)
+            if n_readback:
+                head += (" %d placed PCell variant%s hold a device that Magic's GDS reader does not keep."
+                         % (n_readback, "" if n_readback == 1 else "s"))
+            self._outcome = Outcome(status, rdb, summary, files, findings=findings, headline=head)
             return self._outcome
         return self._run_netgen(r, ext, rdb, files, findings)
 
@@ -436,7 +462,8 @@ class Task:
         files = {"job_dir": r.dir, "export": os.path.join(r.dir, "in.gds")}
         if self.cmd == "extract":
             summary = "extract: Magic reads nothing in %s (%s), so there is no netlist." % (name, self.cfg.pdk)
-            self._outcome = Outcome(1, rdb, summary, files, findings=findings)
+            self._outcome = Outcome(1, rdb, summary, files, findings=findings,
+                                    headline="Magic reads nothing in %s, so there is no netlist." % name)
             return self._outcome
         v = netgen.Verdict()
         v.complete = True
@@ -445,7 +472,9 @@ class Task:
         summary = ("lvs: Magic reads nothing in %s (%s), so there is no netlist to compare with %s in %s. "
                    "The layout does not match." % (name, self.cfg.pdk, self.schematic_cell,
                                                    self.options["schematic"]))
-        self._outcome = Outcome(1, rdb, summary, files, verdict=v, findings=findings)
+        self._outcome = Outcome(1, rdb, summary, files, verdict=v, findings=findings,
+                                headline="Magic reads nothing in %s, so there is no netlist to compare; "
+                                         "the layout does not match." % name)
         return self._outcome
 
     def _run_netgen(self, r, ext, rdb, files, findings):
@@ -490,14 +519,16 @@ class Task:
         if not v.complete:
             return self._finish_failed("netgen gave no final result; see %s" % report, r, rdb)
         cat = rdb.category(CAT_RESULT, _DESCRIPTIONS[CAT_RESULT])
-        rdb.info(cat, "Final result: %s" % v.final)
+        # On a match the result items are information: nothing in the report is to be fixed.
+        ok = bool(v.matched)
+        rdb.info(cat, "Final result: %s" % v.final, info=ok)
         for reason in v.reasons:
-            rdb.info(cat, reason)
+            rdb.info(cat, reason, info=ok)
         if v.symmetries:
-            rdb.info(cat, "netgen matched with %d symmetries: a match" % v.symmetries)
+            rdb.info(cat, "netgen matched with %d symmetries: a match" % v.symmetries, info=ok)
         if self.job_options.get("makeall"):
             rdb.info(cat, "--ports-from-labels: every label was made a port, which Magic's own flow "
-                          "would not do; see the ports check")
+                          "would not do; see the ports check", info=ok)
         spice = extfile.spice_devices(netlist)
         for c in res.circuits:
             self._mark_circuit(rdb, ext, spice, c, findings)
@@ -513,7 +544,9 @@ class Task:
         n_marks = sum(1 for f in findings if f["category"].startswith("netgen/"))
         if n_marks:
             summary += " %d marker%s in the report." % (n_marks, "" if n_marks == 1 else "s")
-        self._outcome = Outcome(status, rdb, summary, files, verdict=v, findings=findings)
+        head = lvs_headline(self.export.klayout_top, self.schematic_cell, self.options["schematic"], v.matched,
+                            findings)
+        self._outcome = Outcome(status, rdb, summary, files, verdict=v, findings=findings, headline=head)
         return self._outcome
 
     # -- markers --
@@ -651,14 +684,22 @@ class Task:
                 self._add(rdb, findings, CAT_PROPS, self._kl_name(lay_cell),
                           db.DBox(x - 0.05, y - 0.05, x + 0.05, y + 0.05), text)
         top_ext = ext.cells.get(lay_cell)
+        said_no_pins = False
         for lp, sp in c.pin_pairs():
             if lp == netgen.NO_PINS:
-                kl_cell = self.layout.cell(self._kl_name(lay_cell)) if self.layout is not None else None
-                why = ("the layout has no texts" if kl_cell is not None and not has_texts(kl_cell)
-                       else "Magic made no port from its texts")
-                self._add(rdb, findings, CAT_PINS, self._kl_name(lay_cell), None,
-                          "the layout cell %s has no pins: %s" % (lay_cell, why))
-                continue
+                if not said_no_pins:
+                    kl_cell = self.layout.cell(self._kl_name(lay_cell)) if self.layout is not None else None
+                    why = ("the layout has no texts" if kl_cell is not None and not has_texts(kl_cell)
+                           else "Magic made no port from its texts")
+                    self._add(rdb, findings, CAT_PINS, self._kl_name(lay_cell), None,
+                              "the layout cell %s has no pins: %s" % (lay_cell, why))
+                    said_no_pins = True
+                if sp in (netgen.NO_PIN, netgen.NO_PINS):
+                    continue
+                # netgen's first row, "(no pins) | VPWR" (the schematic pin from its
+                # report, netgen.Circuit.pin_pairs): that pin has no layout pin either,
+                # as each row after it says of its own pin.
+                lp = netgen.NO_PIN
             if sp in (netgen.NO_PIN, netgen.NO_PINS) and lp not in (netgen.NO_PIN, netgen.NO_PINS):
                 port = top_ext.port(lp) if top_ext else None
                 text = "layout pin %s has no partner among the pins of %s" % (lp, sch_cell)
@@ -748,8 +789,11 @@ _SAID = re.compile(r"(warning|error|cannot|can't|couldn't|not found|unknown|fail
 
 
 def _magic_lines(result):
+    """Magic's warnings and errors, without what it prints on every run
+    (``drcjob.is_noise``: "Warning: Calma reading is not undoable!")."""
+    from .drcjob import is_noise
     lines = list(getattr(result, "stdout", []) or []) + (getattr(result, "stderr", "") or "").splitlines()
-    return [ln for ln in lines if _SAID.search(ln) and not ln.startswith("KMP_")]
+    return [ln for ln in lines if _SAID.search(ln) and not ln.startswith("KMP_") and not is_noise(ln)]
 
 
 # -- the netlist file the extract command writes ----------------------------------

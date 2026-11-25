@@ -868,6 +868,9 @@ class FeatureJobDirs(_Fake):
         base = os.path.join(self.d, "cache", "jobs", "sky130A", "extract")
         o1 = lvsjob.prepare(self.ly, self.top, self.cfg, self.data, {"cmd": "extract"}).start().wait()
         self.assertEqual(o1.status, 0, o1.summary)
+        # Magic prints "Calma reading is not undoable" on every run: not an item.
+        self.assertEqual(o1.rdb.count("Magic said"), 0)
+        self.assertEqual(o1.headline, "Magic extracted inv (netlist only).")
         key_dir = o1.files["job_dir"]
         self.assertEqual(os.path.dirname(key_dir), base)
         self.assertFalse(os.path.basename(key_dir).startswith("tmp-"))

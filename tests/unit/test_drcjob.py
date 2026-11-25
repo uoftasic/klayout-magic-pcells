@@ -171,6 +171,13 @@ class Dedup(unittest.TestCase):
         kept, dropped = drcjob.dedup({"G": g, "M": m, "T": t}, children, ["G", "M", "T"])
         self.assertEqual((dropped, kept["M"], kept["T"]), (2, [], [t[1]]))
 
+    def test_the_top_cell_keeps_its_copies(self):
+        why = "w (m1.1)"
+        c = [Error("C", why, (0, 0, 10, 10))]
+        t = [Error("T", why, (1000, 0, 1010, 10))]           # C's box through the instance
+        kept, dropped = drcjob.dedup({"C": c, "T": t}, {"T": [("C", Xf(d=(1000, 0)))]}, ["C", "T"], keep=("T",))
+        self.assertEqual((dropped, kept["T"], kept["C"]), (0, t, c))
+
     def test_cells_outside_the_order_are_kept(self):
         e = [Error("X", "w", (0, 0, 1, 1))]
         kept, dropped = drcjob.dedup({"X": e}, {}, [])
@@ -240,6 +247,72 @@ class Classes(unittest.TestCase):
         why = "P-diffusion and N-ohmic must be over N-well or deep N-well"
         self.assertEqual(drcjob.alone_category(why, "dev"),
                          (drcjob.CAT_DRC, why, "only when dev is checked on its own"))
+
+
+@unittest.skipIf(db is None, "the klayout Python module is not installed")
+class Filing(unittest.TestCase):
+    """Hierarchical mode files a box that the top cell's check lists in the
+    top cell: a standard cell without taps, placed in a top
+    cell without taps, gives its latch-up boxes in the top cell, where the
+    tap is missing, and none in the standard cell."""
+
+    LU = "N-diff distance to P-tap must be < 15.0um (LU.2)"
+    AREA = "Metal1 minimum area < 0.083um^2 (met1.6)"
+
+    def unit(self, raw, flat=None):
+        from klayout_magic_pcells.export import ExportResult
+        ly = db.Layout()
+        ly.dbu = 0.001
+        top = ly.create_cell("TOP")
+        cell = ly.create_cell("SC")
+        top.insert(db.DCellInstArray(cell.cell_index(), db.DTrans(db.DVector(10, 0))))
+        er = ExportResult()
+        er.top = er.klayout_top = "TOP"
+        er.name_map = {"TOP": "TOP", "SC": "SC"}
+        u = drcjob._Unit("TOP", er, ly)
+        u.order = ["SC", "TOP"]
+        u.next_first = 2
+        u.raw = raw
+        u.counts = {c: len(v) for c, v in raw.items()}
+        u.flat_state = "done" if flat is not None else "skipped"
+        u.flat = flat
+        return u
+
+    def finish(self, u):
+        cfg = types.SimpleNamespace(pdk="sky130A")
+        t = drcjob.Task(cfg, None, {"style": "drc(full)", "mode": "hierarchical"}, None, [u])
+        t._finish()
+        return t._outcome
+
+    def test_boxes_the_top_cell_lists_are_in_the_top_cell(self):
+        sc = [Error("SC", self.LU, (0, 0, 500, 500))]
+        top = [Error("TOP", self.LU, (10000, 0, 10500, 500))]      # SC's box through the instance
+        out = self.finish(self.unit({"SC": sc, "TOP": top}))
+        self.assertEqual(out.rows, [("TOP", self.LU, (10000, 0, 10500, 500))])
+        self.assertEqual(out.status, 1)
+        self.assertEqual(out.headline, "1 DRC error marker in TOP, rule LU.2.")
+        cells = {out.rdb.db.cell_by_id(it.cell_id()).name() for it in out.rdb.db.each_item()}
+        self.assertEqual(cells, {"TOP"})
+        self.assertIn("1 is in the top cell's check (reported there)", out.summary)
+
+    def test_a_box_only_the_subcell_lists_stays_there(self):
+        sc = [Error("SC", self.AREA, (0, 0, 290, 30))]
+        out = self.finish(self.unit({"SC": sc, "TOP": []}, flat=[]))
+        self.assertEqual(out.rows, [])
+        self.assertEqual(out.alone, [("SC", self.AREA, (0, 0, 290, 30))])
+        self.assertEqual(out.headline, "No DRC errors in TOP. 1 marker is information only.")
+        it = next(out.rdb.db.each_item())
+        self.assertIn("waived", it.tags_str)
+        self.assertTrue(it.is_visited())
+
+    def test_headline(self):
+        rows = [("T", "a (LU.2)", (0, 0, 1, 1))] * 31 + [("T", "b (LU.3)", (0, 0, 1, 1))] * 30 + \
+               [("T", "c (nwell.4)", (0, 0, 1, 1))]
+        self.assertEqual(drcjob.headline(rows, 0, "datapath"),
+                         "62 DRC error markers in datapath, 3 rules: LU.2 31, LU.3 30, nwell.4 1.")
+        self.assertEqual(drcjob.headline([], 0, "drc_02", area=True), "No DRC errors in the checked area of drc_02.")
+        self.assertEqual(drcjob.headline([], 0, "s", nothing=True),
+                         "Magic reads nothing in s, so Magic DRC checked nothing.")
 
 
 class MagicOutput(unittest.TestCase):
@@ -402,6 +475,10 @@ class Texts(unittest.TestCase):
         self.assertEqual(drcjob.command_line(opts, ["inv$1"]),
                          "python3 -m klayout_magic_pcells drc 'my dir/x.gds' --cell 'inv$1' --style 'drc(full)' "
                          "--mode flat --box 0,0,1.5,2")
+        # The report's command names the PDK, as the layers and ports reports' do.
+        self.assertEqual(drcjob.command_line(opts, ["inv"], "sky130A"),
+                         "python3 -m klayout_magic_pcells drc 'my dir/x.gds' --cell inv --pdk sky130A "
+                         "--style 'drc(full)' --mode flat --box 0,0,1.5,2")
 
     def test_the_description_says_a_tmp_job_dir_goes(self):
         # An uncached run's tmp-* directories go when the command ends, and the
@@ -416,8 +493,13 @@ class Texts(unittest.TestCase):
         note = "(removed when the check ends; KMP_JOB_KEEP=1 keeps it)"
         old = os.environ.pop("KMP_JOB_KEEP", None)
         try:
-            text = drcjob._description(cfg, None, opts, [unit], [], None)
+            text = drcjob._description(cfg, None, opts, [unit], ["inv: 0 error boxes"], None)
             self.assertIn("exported file /c/jobs/sky130A/drc/tmp-abc/in.gds %s" % note, text)
+            # One line: the browser's Database list shows a line break as a literal \n.
+            self.assertNotIn("\n", text)
+            self.assertIn("errors. inv: 0 error boxes. inv: exported file", text)
+            self.assertTrue(text.endswith("Command: python3 -m klayout_magic_pcells drc x.gds --cell inv "
+                                          "--pdk sky130A --style 'drc(full)' --mode hierarchical"), text)
             self.assertIn("job directory /c/jobs/sky130A/drc/tmp-def %s" % note, text)
             unit.dirs, unit.flat_dir = ["/c/jobs/sky130A/drc/" + "k" * 64], "/c/jobs/sky130A/drc/" + "f" * 64
             self.assertNotIn("removed when", drcjob._description(cfg, None, opts, [unit], [], None))

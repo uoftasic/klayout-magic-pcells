@@ -298,7 +298,8 @@ class Outcome(unittest.TestCase):
                                     "KMP_PDKS": "sky130A"}, config_path="/nonexistent.ini").for_pdk("sky130A")
         self.msgs = []
         old = gui.message
-        gui.message = lambda kind, title, text: self.msgs.append((kind, title, text))
+        gui.message = lambda kind, title, text, details=None, on_close=None: self.msgs.append(
+            (kind, title, text if not details else "%s\n\n%s" % (text, details)))
         self.addCleanup(setattr, gui, "message", old)
         os.environ.pop("KMP_JOB_KEEP", None)
 
@@ -371,6 +372,117 @@ class Outcome(unittest.TestCase):
             with open(target) as f:
                 self.assertEqual(f.read(), mine)
         self.assertEqual(gui._free_name(target), os.path.join(work, "inv.magic-2.spice"))
+
+
+
+
+class ResultMessages(unittest.TestCase):
+    """The result message's plain first line, the
+    browser brought in front again, and netgen's report shown at its end."""
+
+    def setUp(self):
+        self._pya, self._show_text, self._message = gui._pya, gui.show_text, gui.message
+
+    def tearDown(self):
+        gui._pya, gui.show_text, gui.message = self._pya, self._show_text, self._message
+
+    def test_headline_first_then_the_summary(self):
+        import types
+        out = types.SimpleNamespace(status=1, headline="2 DRC error markers in drc_02, rule li.5.",
+                                    summary="Magic DRC (drc(full), hierarchical) of drc_02 on sky130A: 2 error boxes.",
+                                    alone=[], classes={})
+        self.assertEqual(gui.message_texts(out), (out.headline, out.summary))
+        self.assertEqual(gui.message_texts(out, "Netlist: /x/drc_02.magic.spice"),
+                         (out.headline, out.summary + "\n\nNetlist: /x/drc_02.magic.spice"))
+        failed = types.SimpleNamespace(status=2, summary="layers: cancelled")
+        self.assertEqual(gui.message_texts(failed), ("layers: cancelled", ""))
+
+    def test_the_message_brings_the_browser_back(self):
+        import types
+        said = []
+        gui.message = lambda *a, **k: said.append((a, k))
+        ctx = types.SimpleNamespace(view=None)
+        out = types.SimpleNamespace(status=0, headline="No port findings in inv.", summary="ports on sky130A",
+                                    files={})
+        run = types.SimpleNamespace(title="Port check", error=None, cancelled=False, outcome=out)
+        gui._show_outcome(ctx, run, None, None)
+        (args, kw), = said
+        self.assertEqual(args, ("info", "Port check", "No port findings in inv.", "ports on sky130A"))
+        self.assertIs(kw["on_close"], gui.raise_browser)
+
+    def test_raise_browser(self):
+        raised = []
+
+        class W:
+            def __init__(self, name, visible):
+                self.objectName, self.visible = name, visible
+
+            def isVisible(self):
+                return self.visible
+
+            def raise_(self):
+                raised.append(("raise", self.objectName, self.visible))
+
+            def activateWindow(self):
+                raised.append(("activate", self.objectName, self.visible))
+
+        class QApplication:
+            @staticmethod
+            def topLevelWidgets():
+                return [W("MarkerBrowserDialog", True), W("MarkerBrowserDialog", False), W("kmp_message", True)]
+
+        import types
+        gui._pya = lambda: types.SimpleNamespace(QApplication=QApplication)
+        gui.raise_browser()
+        self.assertEqual(raised, [("raise", "MarkerBrowserDialog", True), ("activate", "MarkerBrowserDialog", True)])
+
+    def test_netgens_report_opens_at_its_end_and_no_cache_path(self):
+        import types
+        shown = []
+        gui.show_text = lambda *a, **k: shown.append((a, k))
+        d = tempfile.mkdtemp(prefix="kmp-gui-")
+        try:
+            report = os.path.join(d, "lvs.out")
+            with open(report, "w") as f:
+                f.write("...\nFinal result: Circuits match uniquely.\n")
+            self.assertIsNone(gui.lvs_after(types.SimpleNamespace(files={"report": report})))
+            (args, kw), = shown
+            self.assertTrue(kw.get("at_end"))
+            self.assertIn("Final result", args[1])
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
+class Windows(unittest.TestCase):
+    def test_windows_fit_the_screen(self):
+        """Rule differences asked for 1100 x 760 on a 1280 x 800
+        screen whose panel leaves 1280 x 769."""
+        self.assertEqual(gui.fit_size((1100, 760), (1280, 769)), (1100, 699))
+        self.assertEqual(gui.fit_size((1100, 760), (1920, 1050)), (1100, 760))
+        self.assertEqual(gui.fit_size((1100, 760), None), (1100, 760))
+
+    def test_extract_title_leaves_the_cell_to_the_dialog(self):
+        """The window manager cut "Extract drc_02 with Magic (" at
+        the dialog's width."""
+        self.assertEqual(gui.extract_title("sky130A"), "Extract with Magic (sky130A)")
+
+    def test_a_netlist_of_the_plugin_is_no_schematic(self):
+        """The LVS dialog asks before it takes a netlist that
+        Extract wrote."""
+        d = tempfile.mkdtemp(prefix="kmp-gui-")
+        try:
+            mine = os.path.join(d, "drc_02.magic.spice")
+            with open(mine, "w") as f:
+                f.write("* Written by klayout_magic_pcells 0.6.2: Magic's netlist of drc_02\n.subckt drc_02 A\n.ends\n")
+            sch = os.path.join(d, "my_inv_sch.spice")
+            with open(sch, "w") as f:
+                f.write(".subckt my_inv A Y VPWR VGND\n.ends\n")
+            self.assertTrue(gui.plugin_netlist(mine))
+            self.assertFalse(gui.plugin_netlist(sch))
+            self.assertFalse(gui.plugin_netlist(""))
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
 
 
 if __name__ == "__main__":

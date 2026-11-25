@@ -178,13 +178,28 @@ class Circuit:
             self.properties.append(tuple(sides[:2]))
         pins = raw.get("pins") or [[], []]
         self.pins = tuple([p for p in side if p != ""] for side in pins)
+        # The rows of the report's "Subcircuit pins:" table for this pair
+        # (report_pins), set by run().
+        self.report_pins = []
 
     def pin_pairs(self):
         """[(layout pin, schematic pin)] by position; a missing side is
-        "(no matching pin)" or "(no pins)"."""
+        "(no matching pin)" or "(no pins)". On the layout's "(no pins)" row,
+        netgen's JSON gives "(no matching pin)" for the schematic pin that its
+        report names ("(no pins) | VPWR **Mismatch**"): the report's name is
+        used there."""
         lay, sch = self.pins
         n = max(len(lay), len(sch))
-        return [(lay[i] if i < len(lay) else NO_PIN, sch[i] if i < len(sch) else NO_PIN) for i in range(n)]
+        out = []
+        for i in range(n):
+            lp = lay[i] if i < len(lay) else NO_PIN
+            sp = sch[i] if i < len(sch) else NO_PIN
+            if lp == NO_PINS and sp in (NO_PIN, NO_PINS) and i < len(self.report_pins):
+                named = self.report_pins[i][1]
+                if named and not named.startswith("("):
+                    sp = named
+            out.append((lp, sp))
+        return out
 
     def __repr__(self):
         return "Circuit(%r)" % (self.name,)
@@ -240,6 +255,37 @@ def circuit(circuits, layout_cell, schematic_cell=None):
     return circuits[-1] if circuits else None
 
 
+_PIN_ROW_END = re.compile(r"\s*\*\*Mismatch\*\*\s*$")
+
+
+def report_pins(text):
+    """{(layout cell, schematic cell): [(layout pin, schematic pin)]} from the
+    report's "Subcircuit pins:" tables, the cells' text as netgen wrote it,
+    without "**Mismatch**"."""
+    out = {}
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        if lines[i].strip() != "Subcircuit pins:" or i + 1 >= len(lines):
+            i += 1
+            continue
+        head = lines[i + 1].split("|")
+        names = tuple(h.strip().split(":", 1)[-1].strip() for h in head[:2])
+        rows = []
+        j = i + 2
+        if j < len(lines) and set(lines[j].strip()) <= set("-|"):
+            j += 1
+        while j < len(lines) and lines[j].strip() and not set(lines[j].strip()) <= set("-"):
+            parts = lines[j].split("|", 1)
+            if len(parts) == 2:
+                rows.append(tuple(_PIN_ROW_END.sub("", p).strip() for p in parts))
+            j += 1
+        if len(names) == 2:
+            out[names] = rows
+        i = j
+    return out
+
+
 # -- the schematic --------------------------------------------------------------
 
 _SUBCKT = re.compile(r"^\s*\.subckt\s+(\S+)", re.I | re.M)
@@ -292,7 +338,11 @@ def run(cfg, layout, layout_cell, schematic, schematic_cell, report, cwd=None, t
         raise NetgenError("netgen wrote no report (exit status %d): %s"
                           % (p.returncode, " | ".join(out.strip().splitlines()[-3:])))
     with open(report, encoding="utf-8", errors="replace") as f:
-        verdict = parse_report(f.read())
+        text = f.read()
+    verdict = parse_report(text)
     json_path = os.path.splitext(report)[0] + ".json"
     circuits = read_json(json_path)
+    rows = report_pins(text)
+    for c in circuits:
+        c.report_pins = rows.get(c.name, [])
     return Result(p.returncode, out, report, json_path, elapsed, verdict, circuits)

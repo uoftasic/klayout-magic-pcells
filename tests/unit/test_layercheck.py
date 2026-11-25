@@ -9,7 +9,7 @@ import unittest
 from tests.unit._util import needs_klayout, db  # noqa: F401
 
 if db is not None:
-    from klayout_magic_pcells import layercheck, pdkdata
+    from klayout_magic_pcells import layercheck, markers, pdkdata
 
 PDKS = ("sky130A", "gf180mcuD", "ihp-sg13g2", "ihp-sg13cmos5l")
 
@@ -229,6 +229,24 @@ class F3F4F5(unittest.TestCase):
         user[L("sky130A", "li")] = [li]
         self.assertEqual(run("sky130A", user, merged(user, {L("sky130A", "li"): [li]}))["F3"], [])
 
+    def test_cut_on_diffusion_without_implant_names_the_implant(self):
+        """li covers the cut, but the diffusion under it has
+        neither nsdm nor psdm, so Magic makes no contact there; the F3 item
+        says that, and not that li is missing."""
+        diff = (0.0, 0.0, 0.5, 0.5)
+        user = {L("sky130A", "diff"): [diff], L("sky130A", "li"): [diff],
+                L("sky130A", "licon"): [(0.165, 0.165, 0.335, 0.335)]}
+        magic = dict(user)
+        del magic[L("sky130A", "licon")]
+        f3 = run("sky130A", user, magic)["F3"]
+        self.assertEqual(len(f3), 1)
+        self.assertIn("The cut has li over it, but the diffusion under it has neither nsdm nor psdm", f3[0]["text"])
+        self.assertNotIn("only where li", f3[0]["text"])
+        # With nsdm drawn, a dropped cut gets the reason about li again.
+        user[L("sky130A", "nsdm")] = [grow(diff, 0.2)]
+        f3 = run("sky130A", user, magic)["F3"]
+        self.assertNotIn("neither nsdm nor psdm", f3[0]["text"])
+
     def test_conductor_magic_drops_and_adds(self):
         for pdk in PDKS:
             with self.subTest(pdk=pdk):
@@ -267,6 +285,21 @@ class F3F4F5(unittest.TestCase):
         magic = merged(user, {cut: [(0.1, 0.19, 0.30, 0.41)]})
         out = run("gf180mcuD", user, magic)
         self.assertIn("breaks the rule too", out["F5"][0]["text"])
+
+
+@needs_klayout
+class Headline(unittest.TestCase):
+    def test_plain_words(self):
+        """The GUI message's first line."""
+        from klayout_magic_pcells.export import ExportResult
+        er = ExportResult()
+        user = nmos("sky130A", None)
+        out = run("sky130A", user, None, [device("sky130A", m="sky130_fd_pr__pfet_01v8")])
+        out["F3"] = [{"check": "F3", "layer": "licon1.drawing"}] * 2
+        self.assertEqual(layercheck.headline(out, er, "my_inv"),
+                         "In my_inv: 1 transistor that Magic reads as another device or none; "
+                         "2 shapes or cuts that Magic drops (licon1.drawing).")
+        self.assertEqual(layercheck.headline({}, er, "my_inv"), "No generated-layer findings in my_inv.")
 
 
 @needs_klayout
@@ -341,7 +374,7 @@ class Prepare(unittest.TestCase):
         self.assertEqual(o.status, 2, o.summary)
         self.assertTrue(o.summary.startswith("layers: "), o.summary)
         self.assertEqual(o.rdb.count(layercheck.CAT_JOB), 1)
-        said = [v.string() for it in o.rdb.db.each_item() for v in it.each_value() if v.is_string()]
+        said = [markers.item_text(it) for it in o.rdb.db.each_item()]
         for t in texts:
             self.assertIn(t, o.summary)
             self.assertTrue(any(t in s for s in said), said)

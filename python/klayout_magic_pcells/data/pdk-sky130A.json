@@ -16809,7 +16809,9 @@
    "grow_um": 0.125,
    "line": 840,
    "file": "sky130A.tech",
-   "rule_ids": [],
+   "rule_ids": [
+    "n/psdm.5b"
+   ],
    "enclosure_check": true,
    "note": "bloat-or * 125 allnactivenontap 0; grow then shrink 0.185 um at sky130A.tech:853 (closes gaps); close 0.265 um2 at sky130A.tech:855 (fills holes)",
    "source": "parser"
@@ -16851,7 +16853,9 @@
    "grow_um": 0.125,
    "line": 845,
    "file": "sky130A.tech",
-   "rule_ids": [],
+   "rule_ids": [
+    "n/psdm.5b"
+   ],
    "enclosure_check": true,
    "note": "bloat-or * 125 allpactivenontap 0; grow then shrink 0.185 um at sky130A.tech:864 (closes gaps); close 0.265 um2 at sky130A.tech:866 (fills holes)",
    "source": "parser"
@@ -16891,7 +16895,9 @@
    "grow_um": 0.18,
    "line": 892,
    "file": "sky130A.tech",
-   "rule_ids": [],
+   "rule_ids": [
+    "lvtn.4b"
+   ],
    "enclosure_check": true,
    "note": "bridge 0.38 um at sky130A.tech:893 (closes gaps); grow then shrink 0.185 um at sky130A.tech:894 (closes gaps); close 0.265 um2 at sky130A.tech:896 (fills holes)",
    "source": "parser"
@@ -16932,7 +16938,7 @@
    "line": 917,
    "file": "sky130A.tech",
    "rule_ids": [
-    "hvtp.4"
+    "hvtp.3"
    ],
    "enclosure_check": true,
    "note": "bridge 0.38 um at sky130A.tech:918 (closes gaps); grow then shrink 0.185 um at sky130A.tech:919 (closes gaps); close 0.265 um2 at sky130A.tech:921 (fills holes)",
@@ -17090,7 +17096,9 @@
    "grow_um": 0.1,
    "line": 1128,
    "file": "sky130A.tech",
-   "rule_ids": [],
+   "rule_ids": [
+    "licon.15"
+   ],
    "enclosure_check": true,
    "note": "cut squares (squares-grid) at sky130A.tech:1127; bridge 0.27 um at sky130A.tech:1129 (closes gaps); bridge 0.27 um at sky130A.tech:1131 (closes gaps); grow then shrink 0.13 um at sky130A.tech:1132 (closes gaps)",
    "source": "parser"
@@ -17403,10 +17411,6 @@
     53
    ],
    [
-    83,
-    44
-   ],
-   [
     89,
     44
    ],
@@ -17529,6 +17533,12 @@
    [
     122,
     16
+   ]
+  ],
+  "comment": [
+   [
+    83,
+    44
    ]
   ],
   "klayout_lvs_text": [

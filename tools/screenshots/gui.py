@@ -779,7 +779,8 @@ def close_message(label):
         m = message_box()
         if m is None:
             raise Again()
-        notes.setdefault("messages", {})[label] = m.text
+        # The plain first line, then the details (the command line's summary).
+        notes.setdefault("messages", {})[label] = m.text + ("\n\n" + m.informativeText if m.informativeText else "")
         [b for b in find(m, cls="QPushButton", visible=True)][0].click()
     step.__name__ = "close_message_%s" % label
     return step

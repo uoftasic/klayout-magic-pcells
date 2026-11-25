@@ -362,17 +362,19 @@ def _prune():
     _windows[:] = keep
 
 
-def message(kind, title, text):
+def message(kind, title, text, details=None, on_close=None):
     """A non-modal message box (info, warning or critical) in the GUI; the
-    log elsewhere."""
+    log elsewhere. ``details`` goes below ``text`` in smaller type;
+    ``on_close()`` runs when the box closes."""
     pya = _pya()
     if not has_qt():
+        full = text if not details else "%s\n%s" % (text, details)
         if kind == "critical":
-            _log_error("%s: %s" % (title, text))
+            _log_error("%s: %s" % (title, full))
         else:
             try:
                 from ._kl import info
-                info("%s: %s" % (title, text))
+                info("%s: %s" % (title, full))
             except Exception:
                 pass
         return None
@@ -381,13 +383,95 @@ def message(kind, title, text):
     mb.objectName = "kmp_message"
     mb.windowTitle = "Magic: %s" % title
     mb.text = text
+    if details:
+        mb.informativeText = details
     mb.icon = {"info": pya.QMessageBox.Information, "warning": pya.QMessageBox.Warning,
                "critical": pya.QMessageBox.Critical}[kind]
     mb.addButton(pya.QMessageBox.Ok)
     mb.windowModality = pya.Qt.NonModal
+    if on_close is not None:
+        mb.finished = lambda *_: on_close()
     mb.show()
     _windows.append(mb)
     return mb
+
+
+BROWSER = "MarkerBrowserDialog"   # the object name of KLayout's Marker Database Browser
+
+
+def browser_windows():
+    """KLayout's Marker Database Browsers that are on screen. Each is a window
+    of its own, without a parent (lay::Browser), so the window manager does not
+    keep it above the main window."""
+    pya = _pya()
+    try:
+        widgets = pya.QApplication.topLevelWidgets()
+    except Exception:
+        return []
+    out = []
+    for w in widgets:
+        try:
+            if w.objectName == BROWSER and w.isVisible():
+                out.append(w)
+        except Exception:
+            pass
+    return out
+
+
+def raise_browser():
+    """Bring the Marker Database Browser in front of the main window. Under
+    XFCE with KLayout maximised, closing the result message gives the focus
+    back to the main window, which then covers the browser."""
+    for w in browser_windows():
+        try:
+            w.raise_()
+            w.activateWindow()
+        except Exception:
+            pass
+
+
+def fit_size(want, available, margin=(40, 70)):
+    """(width, height): ``want`` made small enough for the screen area
+    ``available`` (width, height), less ``margin`` for the window's frame
+    and title bar."""
+    w, h = want
+    if available:
+        w = min(w, max(200, available[0] - margin[0]))
+        h = min(h, max(150, available[1] - margin[1]))
+    return w, h
+
+
+def _value(x):
+    """A pya attribute that is a property in some bindings and a method in others."""
+    return x() if callable(x) else x
+
+
+def _available():
+    """(width, height) of the screen area windows may use (without panels),
+    or None."""
+    pya = _pya()
+    for get in (lambda: _value(_value(pya.QGuiApplication.primaryScreen).availableGeometry),
+                lambda: _value(pya.QApplication.desktop).availableGeometry(main_window())):
+        try:
+            g = get()
+            return (int(_value(g.width)), int(_value(g.height)))
+        except Exception:
+            continue
+    return None
+
+
+def _resizable(dlg, size):
+    """Size a window to fit the screen, and ask the window manager for a
+    maximise button. It stays a dialog of the main window, which keeps it
+    above that window."""
+    pya = _pya()
+    try:
+        dlg.setWindowFlags(pya.Qt.Dialog | pya.Qt.WindowTitleHint | pya.Qt.WindowSystemMenuHint
+                           | pya.Qt.WindowMaximizeButtonHint | pya.Qt.WindowCloseButtonHint)
+    except Exception:
+        pass
+    w, h = fit_size(size, _available())
+    dlg.resize(w, h)
 
 
 def ask_yes_no(title, text):
@@ -396,8 +480,9 @@ def ask_yes_no(title, text):
     return res == pya.MessageBox.Yes
 
 
-def show_text(title, text, name="kmp_text", markdown=False, size=(900, 600)):
-    """A non-modal window with ``text`` (plain, or Markdown when asked)."""
+def show_text(title, text, name="kmp_text", markdown=False, size=(900, 600), at_end=False):
+    """A non-modal window with ``text`` (plain, or Markdown when asked),
+    sized to fit the screen; ``at_end`` scrolls to the last line."""
     pya = _pya()
     if not has_qt():
         return None
@@ -405,7 +490,7 @@ def show_text(title, text, name="kmp_text", markdown=False, size=(900, 600)):
     dlg = pya.QDialog(main_window())
     dlg.objectName = name
     dlg.windowTitle = title
-    dlg.resize(size[0], size[1])
+    _resizable(dlg, size)
     lay = pya.QVBoxLayout(dlg)
     if markdown:
         view = pya.QTextBrowser(dlg)
@@ -429,6 +514,12 @@ def show_text(title, text, name="kmp_text", markdown=False, size=(900, 600)):
     lay.addWidget(bb)
     dlg.windowModality = pya.Qt.NonModal
     dlg.show()
+    if at_end:
+        try:
+            view.moveCursor(pya.QTextCursor.End)
+            view.ensureCursorVisible()
+        except Exception:
+            pass
     _windows.append(dlg)
     return dlg
 
@@ -510,13 +601,23 @@ def ask_drc_options(styles, current, pdk):
         dlg._destroy()
 
 
+def extract_title(pdk):
+    """The Extract dialog's title. The cell goes in the dialog, not the
+    title, which the window manager cuts at the dialog's width."""
+    return "Extract with Magic (%s)" % pdk
+
+
 def ask_extract_options(cell, pdk):
     """{"caps": bool} or None on Cancel."""
     pya = _pya()
     dlg = pya.QDialog(main_window())
     dlg.objectName = "kmp_extract_dialog"
-    dlg.windowTitle = "Extract %s with Magic (%s)" % (cell, pdk)
+    dlg.windowTitle = extract_title(pdk)
+    dlg.resize(420, dlg.height)
     form = pya.QFormLayout(dlg)
+    cell_label = pya.QLabel(cell, dlg)
+    cell_label.objectName = "cell"
+    form.addRow("Cell", cell_label)
     radios = _radios(dlg, form, "Netlist", [("plain", "Netlist only"),
                                            ("caps", "With parasitic capacitance")], "plain", "kind_")
     form.addRow(_buttons(dlg))
@@ -600,9 +701,22 @@ def ask_lvs_options(cell, current, pdk):
             if sub.count == 0:
                 pya.MessageBox.warning("Magic: LVS", "%s has no .subckt line." % path.text, pya.MessageBox.Ok)
                 continue
+            if plugin_netlist(path.text) and not ask_yes_no(
+                    "LVS", "%s is a netlist that Extract with Magic wrote from a layout, not a schematic. "
+                    "LVS against it compares Magic's netlist with Magic's netlist.\n\nUse it anyway?"
+                    % path.text):
+                continue
             return {"schematic": os.path.abspath(path.text), "subckt": sub.currentText}
     finally:
         dlg._destroy()
+
+
+def plugin_netlist(path):
+    """True for a netlist file that Extract with Magic wrote (its first line
+    is the plugin's header), which the LVS dialog's file list offers beside
+    the schematics."""
+    from .lvsjob import written_by_plugin
+    return bool(path) and written_by_plugin(path)
 
 
 def ask_pdk(candidates, preselect, why):
@@ -1027,14 +1141,30 @@ def _show_outcome(ctx, run, rdb_index, after):
         view.show_rdb(idx, ctx.cv_index)
     # after() first: extract's names the file written in the summary.
     extra = after(out) if after is not None else None
-    text = out.summary
+    head, details = message_texts(out, extra)
+    kind = {0: "info", 1: "warning"}.get(out.status, "critical")
+    message(kind, title, head, details, on_close=raise_browser)
+
+
+def message_texts(out, extra=None):
+    """(text, details) of a check's result message: the outcome's plain
+    headline, then the summary the command line prints, the DRC classes'
+    lines and ``extra``. An outcome without a headline (a failed check) puts
+    its summary first."""
+    parts = []
+    head = getattr(out, "headline", None)
+    if not head:
+        head, summary = out.summary, ""
+    else:
+        summary = out.summary
+    if summary:
+        parts.append(summary)
     classes = drc_classes_text(out) if hasattr(out, "alone") else ""
     if classes:
-        text += "\n\n" + classes
+        parts.append(classes)
     if extra:
-        text += "\n\n" + extra
-    kind = {0: "info", 1: "warning"}.get(out.status, "critical")
-    message(kind, title, text)
+        parts.append(extra)
+    return head, "\n\n".join(parts)
 
 
 def start(ctx, cmd, cells, options, title=None, rdb_index=None, after=None):
@@ -1235,18 +1365,19 @@ def on_lvs():
     else:
         raise UserError("LVS needs a schematic; choose it in the GUI first.")
 
-    def after(out):
-        report = out.files.get("report")
-        if not report:
-            return None
-        from . import jobs
-        show_text("netgen's report: %s" % report, _read(report), name="kmp_lvs_report")
-        # Its folder goes with the outcome (jobs.release), unless KMP_JOB_KEEP=1.
-        gone = "" if jobs.keep_job_dirs() else " (removed when the check ends; KMP_JOB_KEEP=1 keeps it)"
-        return "netgen's report: %s%s" % (report, gone)
-
     start(ctx, "lvs", [ctx.cell], {"cmd": "lvs", "schematic": opts["schematic"],
-                                   "schematic_cell": opts["subckt"], "file": ctx.file}, after=after)
+                                   "schematic_cell": opts["subckt"], "file": ctx.file}, after=lvs_after)
+
+
+def lvs_after(out):
+    """What LVS does with its outcome: netgen's report in a window, scrolled
+    to its end, where netgen's final result is. The window's title names the
+    file, which goes with the job directory (jobs.release) unless
+    KMP_JOB_KEEP=1; the message gets no line, so it names no cache path."""
+    report = out.files.get("report")
+    if report:
+        show_text("netgen's report: %s" % report, _read(report), name="kmp_lvs_report", at_end=True)
+    return None
 
 
 def on_layers():
@@ -1321,7 +1452,7 @@ def show_settings(cfg):
     dlg = pya.QDialog(main_window())
     dlg.objectName = "kmp_settings"
     dlg.windowTitle = "Magic: Settings"
-    dlg.resize(1150, 640)
+    _resizable(dlg, (1150, 640))
     lay = pya.QVBoxLayout(dlg)
     label = pya.QLabel(head, dlg)
     label.wordWrap = True

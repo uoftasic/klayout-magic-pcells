@@ -280,6 +280,27 @@ NOTEXT_JSON = """[{"name": ["inv_no_text", "inv_no_text"], "devices": [[], []], 
  "badelements": [], "pins": [["(no pins)", "(no matching pin)", "(no matching pin)", "(no matching pin)"],
  ["(no matching pin)", "A", "Y", "VGND"]]}]"""
 
+# The pin table of netgen's report (netgen 1.5.323) on another texts-only
+# sky130A inverter, my_inv, against its schematic. Where the JSON's
+# "(no pins)" row has "(no matching pin)" on the schematic side, the
+# report names VPWR. The test gives NOTEXT_JSON that cell's name.
+NOTEXT_REPORT = """\
+Netlists match uniquely with port errors.
+
+Subcircuit pins:
+Circuit 1: my_inv                          |Circuit 2: my_inv                          
+-------------------------------------------|-------------------------------------------
+(no pins)                                  |VPWR **Mismatch**                          
+(no pin, node is A)                        |A                                          
+(no pin, node is Y)                        |Y                                          
+(no pin, node is VGND)                     |VGND                                       
+---------------------------------------------------------------------------------------
+Cell pin lists for my_inv and my_inv altered to match.
+Device classes my_inv and my_inv are equivalent.
+
+Final result: Top level cell failed pin matching.
+"""
+
 
 class JsonTest(unittest.TestCase):
     def test_p3(self):
@@ -308,6 +329,18 @@ class JsonTest(unittest.TestCase):
         c = netgen.parse_json(NOTEXT_JSON)[0]
         self.assertEqual(c.pin_pairs()[0], (netgen.NO_PINS, netgen.NO_PIN))
         self.assertEqual(c.pin_pairs()[1], (netgen.NO_PIN, "A"))
+
+    def test_the_report_names_the_pin_the_json_leaves_out(self):
+        """With the report's pin table, the "(no pins)" row has
+        its schematic pin, VPWR."""
+        rows = netgen.report_pins(NOTEXT_REPORT)
+        self.assertEqual(rows, {("my_inv", "my_inv"): [("(no pins)", "VPWR"), ("(no pin, node is A)", "A"),
+                                                       ("(no pin, node is Y)", "Y"),
+                                                       ("(no pin, node is VGND)", "VGND")]})
+        c = netgen.parse_json(NOTEXT_JSON.replace("inv_no_text", "my_inv"))[0]
+        c.report_pins = rows[c.name]
+        self.assertEqual(c.pin_pairs(), [(netgen.NO_PINS, "VPWR"), (netgen.NO_PIN, "A"), (netgen.NO_PIN, "Y"),
+                                         (netgen.NO_PIN, "VGND")])
 
     def test_circuit_choice(self):
         cs = netgen.parse_json(OPEN_DRAIN_JSON) + netgen.parse_json(W036_JSON)

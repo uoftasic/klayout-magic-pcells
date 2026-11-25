@@ -452,6 +452,50 @@ class Ports(MiniPdk):
         self.assertNotIn("labels(", text)
 
 
+class CommentLabels(unittest.TestCase):
+    """A label layer that Magic reads onto a type of the comment plane
+    (sky130A's text.drawing, read as comment) names no net: it goes in the
+    ports table's "comment", not in "text"."""
+
+    def test_comment_labels(self):
+        tech = MINI_TECH.replace("  metal1 metal1,m1\nend", "  metal1 metal1,m1\n  comment comment\nend", 1)
+        tech = tech.replace("  metal1,m1\nend", "  metal1,m1\n  comment\nend", 1)
+        tech = tech.replace(" calma MET1 68 20", " layer comment TTEXT\n\tlabels TTEXT\n\n calma TTEXT 83 44\n"
+                            " calma MET1 68 20", 1)
+        root = tempfile.mkdtemp(prefix="kmp-pdkdata-")
+        try:
+            pdk = os.path.join(root, "sky130A")
+            write(os.path.join(pdk, "libs.tech", "magic", "sky130A.tech"), tech)
+            write(os.path.join(pdk, B.PDK_FILES["sky130A"]["lyp"]), MINI_LYP)
+            write(os.path.join(pdk, B.PDK_FILES["sky130A"]["klayout_lvs"]), MINI_LVS)
+            p = B.build("sky130A", root, {})["ports"]
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+        self.assertEqual(p["comment"], [[83, 44]])
+        self.assertNotIn([83, 44], p["text"])
+        self.assertIn([68, 5], p["text"])
+
+    def test_shipped(self):
+        for pdk, ld in (("sky130A", [83, 44]), ("ihp-sg13g2", [63, 0]), ("ihp-sg13cmos5l", [63, 0])):
+            with self.subTest(pdk=pdk):
+                p = pdkdata.load(pdk).ports()
+                self.assertIn(ld, p["comment"])
+                self.assertNotIn(ld, p["text"])
+
+
+class RuleNames(unittest.TestCase):
+    def test_sky130a_enclosures_name_the_foundry_rule(self):
+        """SkyWater's periphery rules name each enclosure that F1 measures on
+        sky130A: licon.15 for npc, n/psdm.5b for the taps,
+        hvtp.3 (not hvtp.4, the spacing) and lvtn.4b for the gates."""
+        got = {(g["name"], g["from"]): g["rule_ids"] for g in pdkdata.load("sky130A").generated()
+               if g["enclosure_check"]}
+        self.assertEqual(got, {("psdm", "p-diffusion"): ["n/psdm.5a"], ("psdm", "p-tap"): ["n/psdm.5b"],
+                               ("nsdm", "n-diffusion"): ["n/psdm.5a"], ("nsdm", "n-tap"): ["n/psdm.5b"],
+                               ("lvtn", "fet gate (lvt)"): ["lvtn.4b"], ("hvtp", "pfet gate (hvt)"): ["hvtp.3"],
+                               ("npc", "poly contact cut"): ["licon.15"]})
+
+
 class Source(MiniPdk):
     def test_source_grid_and_lvs(self):
         d = self.data

@@ -255,12 +255,18 @@ class Names(unittest.TestCase):
         names = [c for c in CASES.values() if c["set"] == "names" and c["targets"]]
         out = run_drc(case_path(names[0]), "NTOP")
         self.assertEqual(out.status, 1, out.summary)
-        by_cell = collections.defaultdict(list)
-        for cell, why, box in out.rows:
-            by_cell[cell].append(drcjob.rule_id(why))
+        # Each cell, loaded under the name the export gave it, has its error in its own
+        # check, under its KLayout name.
+        er = out.export["NTOP"]
+        own = collections.defaultdict(list)
+        for fname, errs in out.raw["NTOP"].items():
+            for e in errs:
+                own[er.klayout_name(fname)].append(drcjob.rule_id(e.why))
         for c in names:
-            self.assertEqual(by_cell.get(c["top"]), c["targets"], c["top"])
-        self.assertEqual(set(by_cell), {c["top"] for c in names})
+            self.assertEqual(own.get(c["top"]), c["targets"], c["top"])
+        # NTOP's own check lists every one of them, so the report has them in NTOP.
+        by_cell = collections.Counter(cell for cell, _why, _box in out.rows)
+        self.assertEqual(by_cell, {"NTOP": len(names)})
 
     def test_each_name_as_its_own_top_and_a_missing_cell(self):
         names = [c for c in CASES.values() if c["set"] == "names" and c["targets"]]
@@ -326,8 +332,12 @@ class Jobs(unittest.TestCase):
             out = run_drc(path, "TOPB")
             self.assertEqual(out.status, 1, out.summary)
             self.assertEqual(len(out.files["jobs"]), 2)
+            # Each child's own check, in one of the two processes, has its error; TOPB's
+            # check lists all 20, so the report has them in TOPB.
+            own = {c: len(errs) for c, errs in out.raw["TOPB"].items() if c != "TOPB"}
+            self.assertEqual(own, {"c%02d" % i: 1 for i in range(20)})
             cells = collections.Counter(r[0] for r in out.rows)
-            self.assertEqual(cells, {"c%02d" % i: 1 for i in range(20)})
+            self.assertEqual(cells, {"TOPB": 20})
             self.assertIn("only_ignored", out.rdb.db.description)
             self.assertEqual(out.empty, ["only_ignored"])
             self.assertEqual(out.rdb.count(markers.CAT_READS_NOTHING), 0)
@@ -374,11 +384,16 @@ class Jobs(unittest.TestCase):
             self.assertIn("cmd='drc'", r.generator)
             self.assertIn("drc list count total", r.description)
             self.assertIn(PDK, r.description)
-            child = r.cell_by_qname(c["child"])
-            self.assertIsNotNone(child)
-            self.assertGreater(len(list(child.each_reference())), 0)
             with open(tsv, encoding="utf-8") as f:
                 lines = f.read().splitlines()
+            # A child cell in the database has its placements. The child has items only
+            # where its own check lists boxes that the top cell's check lacks (information
+            # on sky130A and gf180mcuD); otherwise every error is in the top cell.
+            children = [rc for rc in r.each_cell() if rc.name() != c["top"]]
+            for child in children:
+                self.assertGreater(len(list(child.each_reference())), 0, child.name())
+            if not children:
+                self.assertEqual({ln.split("\t")[0] for ln in lines[1:]}, {c["top"]})
             self.assertEqual(lines[0], drcjob.TSV_HEADER)
             self.assertEqual(len(lines) - 1, sum(1 for _ in r.each_item()) - _export_items(r))
             # The markers' boxes, cell by cell, equal the TSV's rows (design-0.6.md 5.3: a marker
@@ -447,12 +462,13 @@ class ChildOnly(unittest.TestCase):
         self.assertEqual(out.status, 1, out.summary)
         n = out.classes[c["top"]]
         self.assertEqual(n[drcjob.ALONE], 0, out.summary)
-        self.assertEqual(len(out.rows), n[drcjob.TOP] + n[drcjob.IN_TOP] + n[drcjob.FLAT_ONLY])
+        # The top cell's own check, and what only the flattened check confirms.
+        self.assertEqual(len(out.rows), n[drcjob.TOP] + n[drcjob.FLAT_ONLY])
         self.assertIn("only in the flattened layout's check", out.summary)
         sys.stderr.write("\n%s sheet: %s\n" % (PDK, out.summary.split(". ", 1)[1]))
         if PDK in ("sky130A", "gf180mcuD"):
             self.assertGreater(n[drcjob.FLAT_ONLY], 0, out.summary)
-            texts = [v.string() for it in out.rdb.db.each_item() for v in it.each_value() if v.is_string()]
+            texts = [markers.item_text(it) for it in out.rdb.db.each_item()]
             self.assertTrue(any(drcjob.FLAT_ONLY_TEXT in t for t in texts))
 
     @unittest.skipUnless(PDK == "sky130A", "the PCell inverter's met1.6 boxes are sky130A's")
@@ -480,13 +496,13 @@ class ChildOnly(unittest.TestCase):
             self.assertEqual(sum(alone.values()), 6, cats)
             self.assertEqual({k[0] for k in alone}, {"met1.6"})
             self.assertFalse(any(k[1] == "No errors found." for k in cats))
-            said = [v.string() for it in r.each_item() for v in it.each_value() if v.is_string()]
+            said = [markers.item_text(it) for it in r.each_item()]
             self.assertNotIn("No errors found.", said)
             # Problem 2 of the 0.6 docs run: no cross-cell finding on it.
             self.assertFalse(any("without a layer drawn" in k[1] for k in cats), cats)
             # The met1.6 items name metal1's drawing layer (allm1 is m1, which is metal1).
-            met = [v.string() for it in r.each_item() for v in it.each_value() if v.is_string()
-                   and v.string().startswith("Metal1 minimum area")]
+            met = [t for t in (markers.item_text(it) for it in r.each_item())
+                   if t.startswith("Metal1 minimum area")]
             self.assertEqual(len(met), 6, met)
             self.assertTrue(all("68/20 (met1.drawing)" in t for t in met), met)
         finally:
@@ -504,7 +520,7 @@ class ReadsNothing(unittest.TestCase):
         self.assertEqual(out.rows, [])
         self.assertEqual(out.rdb.count(markers.CAT_READS_NOTHING), 1, out.summary)
         self.assertEqual(out.rdb.count(drcjob.CAT_FAILED), 0, out.summary)
-        texts = [v.string() for it in out.rdb.db.each_item() for v in it.each_value() if v.is_string()]
+        texts = [markers.item_text(it) for it in out.rdb.db.each_item()]
         item = [t for t in texts if t.startswith("Magic reads nothing in cell %s" % top)]
         self.assertEqual(len(item), 1, texts)
         self.assertIn(layer_text, item[0])
@@ -575,11 +591,11 @@ def _error_boxes(r):
         if cat.name() != drcjob.CAT_DRC or alone:
             continue
         boxes = [v.box() for v in it.each_value() if v.is_box()]
-        texts = [v.string() for v in it.each_value() if v.is_string()]
-        assert len(boxes) == 1 and len(texts) == 1, (boxes, texts)
+        text = markers.item_text(it)
+        assert len(boxes) == 1 and text, (boxes, text)
         b = boxes[0]
         key = tuple(int(round(x * 1000)) for x in (b.left, b.bottom, b.right, b.top))
-        assert texts[0].startswith(why), (texts[0], why)
+        assert text.startswith(why), (text, why)
         out[r.cell_by_id(it.cell_id()).name()][(why, key)] += 1
     return out
 

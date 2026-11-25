@@ -3,7 +3,13 @@
 Written 2026-11-24 from the code of version 0.6.0, for a maintainer, and
 updated for version 0.6.1, which changed the gap tables (3.5), their
 lines in the DRC descriptions (3.1) and some cases of the case suite
-(5.1).
+(5.1), and for version 0.6.2, which changed the menu's messages and
+windows (2.4), the report's lines of text and its information items
+(2.7), where hierarchical DRC files a box (3.1), the pins that LVS
+reports (3.2), the generated-layer check's texts (3.3) and the port
+check's reading of comment layers and pin boxes (3.4). A trial of the
+plugin for a sky130A layout course found the problems that 0.6.2 fixes,
+on the course's layouts, under XFCE on a 1280 × 800 screen.
 
 Version 0.6 adds checks for four PDKs: sky130A, gf180mcuD, ihp-sg13g2 and
 ihp-sg13cmos5l. It runs Magic's DRC, Magic's extraction and netgen's LVS
@@ -20,8 +26,8 @@ Claims carry a tag, as in `docs/design.md`:
 - **[run]**: run with the 0.6 code or its tests in the pinned image
   `hpretl/iic-osic-tools@sha256:3c371645b19c6f6564dc8c7b21e39ad1c1833d274fe5b85639afe1ba9d7987e7`
   (Magic 8.3.681, KLayout 0.30.11, Netgen 1.5.323), either while the 0.6
-  code was being written (*the build* below), on 0.6.0 or on 0.6.1, as
-  the text says; a quoted command output is from 0.6.0 unless the text
+  code was being written (*the build* below), on 0.6.0, 0.6.1 or 0.6.2,
+  as the text says; a quoted command output is from 0.6.0 unless the text
   says otherwise.
 - **[src]**: read from the code.
 - **UNVERIFIED**: neither. Section 7 collects these.
@@ -222,6 +228,7 @@ class Outcome:
     status   # 0 nothing found, 1 findings, 2 the input or a job failed
     rdb      # markers.Rdb, also on failure, when it says why
     summary  # one paragraph, for a message box or stderr
+    headline # the message box's first line, in plain words; None on failure
     files    # name -> path: "job_dir", export, netlist, report, ...
 def cli_main(args, ctx) -> int   # prepare, wait, write -o, --tsv, --json; release
 ```
@@ -257,8 +264,19 @@ which runs no Magic from the menu. Otherwise a non-modal
 s)", and its Cancel button calls `Task.cancel()` (without Qt,
 `pya.AbsoluteProgress` is used and blocks). A second check in the same
 view asks whether to cancel the first. At the end the RDB opens in the
-browser, a message box gives the summary, and the tmp-* job directories
-are released. The DRC dialog's choices are kept in `state.json` beside
+browser and a message box gives the outcome's `headline`, a first line in
+plain words that each check builds (`drcjob.headline`,
+`layercheck.headline`, `portcheck.headline`, `lvsjob.lvs_headline`), and
+below it the summary. After LVS the message gets no line that names
+netgen's report, since the report's window title does. Closing the message calls `raise_browser()`,
+which raises the visible `MarkerBrowserDialog` windows: KLayout's browser
+has no parent window, and under XFCE a maximised main window that gets the
+focus back from the message covered it (seen under XFCE on a 1280 × 800
+screen, with KLayout 0.30.11 and 0.6.1's code; 0.6.2's raise was checked
+there too). The text
+windows and Settings open no larger than the screen's free area and have a
+maximise button (`fit_size`, `_resizable`). Then the tmp-* job
+directories are released. The DRC dialog's choices are kept in `state.json` beside
 `config.ini`. Extract writes `<cell>.magic.spice` by the command line's
 rule (3.2); where that rule refuses, or for a layout that was never
 saved, it says "Not written: ..." and opens a save dialog at the first
@@ -354,6 +372,23 @@ the recipe `klayout_magic_pcells`, such as
 LAYOUT -m FILE.lyrdb` opens a report on its layout; the other order puts
 it in an empty first view (measured in the image).
 
+KLayout 0.30's browser shows an item's values in the Info pane as lines of
+a block that does not wrap, and cuts each value after 200 characters
+(`MarkerBrowserPage::update_info_text` in KLayout's source). `Rdb.item`
+therefore stores a text as several string values (`text_lines`): one per
+sentence or clause, a longer one broken into lines of at most 80
+characters; joined with spaces they give the text back
+(`markers.item_text`). The database's description is one line, because
+the browser's database list shows a line break there as `\n`. An item
+that is information, not a finding of its check, gets KLayout's tag
+`waived` and is marked visited (`Rdb.item(..., info=True)`): the browser
+still counts it in its category's total, but writes the waived count
+after a dash and draws a category of such items in green (seen under
+XFCE with 0.6.2's code). Each check names the export findings that
+count (`add_export_findings(..., counted=...)`): none for DRC, extraction
+and LVS, and the off-grid, read-as-another-type and cross-cell ones for
+the layers check.
+
 ## 3. The checks
 
 ### 3.1 DRC
@@ -368,8 +403,10 @@ and the gap studies found the latch-up and tap rules in `drc(full)` only
 
 The DRC has two modes. Hierarchical mode, the default, exports the
 hierarchy. Magic reads it with a plain `gds read` and checks every cell
-definition as the edit cell, children first and then the top, and each
-cell's errors stay in that cell's coordinates and RDB cell. A child that
+definition as the edit cell, children first and then the top. The top
+cell's check is reported whole, in the top cell; a subcell's box that it
+does not cover stays in that subcell's coordinates and RDB cell (the
+subcell classes below). A child that
 Magic reads as empty is skipped, and so is a cell of the export from
 which Magic made no cell; both are listed by KLayout name in
 `Outcome.empty` and in the RDB description [src]. Flat mode checks a
@@ -400,16 +437,16 @@ would call clean a layout that Magic fails, and the DRC job would disagree
 with the extraction job, which keeps the hierarchy. On every PDK, the
 backend test asserts that the top cell's own listing equals the measured
 top-only result, and that the rules of hierarchical mode's errors are
-exactly the rules of that result [run]. Both modes on one file, trimmed
-[run]:
+exactly the rules of that result [run]. Both modes on one file, trimmed,
+on 0.6.2's code [run]:
 
 ```
 $ python3 -m klayout_magic_pcells drc out/cases/sky130A/hier/inv_base_all_h.gds --tsv -
 cell	rule	why	l	b	r	t
-inv_base_all_dev	nwell.2a	N-well spacing < 1.27um (nwell.2a)	1.17	3.32	1.68	3.4
+inv_base_all_h	nwell.2a	N-well spacing < 1.27um (nwell.2a)	1.17	3.37	1.68	3.4
 ...
 inv_base_all_h	poly.4	poly spacing to Diffusion < 0.075um (poly.4)	1.5	3.5	1.575	3.575
-Magic DRC (drc(full), hierarchical) of inv_base_all_h on sky130A: 38 error boxes, 7 rules, in 2 cells. inv_base_all_h: 38 error boxes, 5 dropped as copies of a subcell's boxes; Magic's drc list count total 5 in the top cell, 7 over the 2 cells checked; of the 47 boxes the subcells' own checks list, 7 are in the top cell's check, 0 only in the flattened layout's check, 40 only when the subcell is checked on its own (information, not counted). The export has 9 findings (category Export).
+Magic DRC (drc(full), hierarchical) of inv_base_all_h on sky130A: 36 error boxes, 7 rules, in 1 cell. inv_base_all_h: 36 error boxes; Magic's drc list count total 5 in the top cell, 7 over the 2 cells checked; of the 47 boxes the subcells' own checks list, 7 are in the top cell's check (reported there), 0 only in the flattened layout's check, 40 only when the subcell is checked on its own (information, not counted). The export has 9 findings (category Export).
 $ python3 -m klayout_magic_pcells drc out/cases/sky130A/hier/inv_base_all_h.gds --mode flat --tsv -
 cell	rule	why	l	b	r	t
 Magic DRC (drc(full), flat) of inv_base_all_h on sky130A: no errors. inv_base_all_h: 0 error boxes; Magic's drc list count total 0 in the top cell. The export has 1 finding (category Export).
@@ -424,10 +461,11 @@ parent's metal joins), and boxes that Magic's check from the top cell
 misses although the flattened mask has them. So `drcjob.classify` sorts
 each box of a cell other than the top, through each placement [src]:
 
-- it is an error if the top cell's own listing has a box of its rule ID
-  that overlaps or touches it;
-- else it is an error if Magic's check of the flattened layout has one,
-  and the item says so;
+- it is left out if the top cell's own listing has a box of its rule ID
+  that overlaps or touches it: the top cell's box, which the report
+  keeps, stands for it;
+- else it is an error, in the subcell, if Magic's check of the flattened
+  layout has one, and the item says so;
 - else it is information, under `Magic DRC/<rule>/only when <cell> is
   checked on its own`. Such boxes go in `Outcome.alone` and are left out
   of the error count, the exit status and the TSV.
@@ -451,12 +489,22 @@ nor flat mode lists them, so they are information and `drc` exits 0
 **Copies.** A parent's check lists most of its children's errors again,
 so hierarchical mode drops a parent's box whose (why-text, box at 1 nm)
 equals a subcell's box at any depth through a placement (`drcjob.dedup`).
-The case suite's sheets place each case as a subcell, 40 µm apart.
-Checked in `drc(full)` without the cache, the sheets of 0.6.0 (130, 69,
-151 and 49 cases; 0.6.1 redrew eight of these cases and added two, 5.1)
-gave the following; the last column is the flattened
-check's time, against about 8.7 s for the hierarchical batches of the
-sky130A sheet during the build [run]:
+Until 0.6.2 the top cell's copies were dropped too, and a subcell box that
+the top cell's check listed was an error in the subcell. That filed a top
+cell's errors under its subcells: on a placement of sky130A standard
+cells without a tap cell, 0.6.1 dropped 61 of the top cell's 62 boxes as
+copies, and 55 of the 56 latch-up and tap boxes went under three
+standard cells, where a reader looks for the fault in the foundry's
+cells [run, 0.6.1]. Since 0.6.2 the top cell keeps every box of its own
+check (`dedup(..., keep=(top,))`), and a subcell box that it covers is
+left out (the first class above); the same placement gives 62 boxes, all
+in the top cell, as flat mode does [run]. The case suite's sheets place
+each case as a subcell, 40 µm apart. Checked in `drc(full)` without the
+cache, the sheets of 0.6.0 (130, 69, 151 and 49 cases; 0.6.1 redrew
+eight of these cases and added two, 5.1) gave the following with 0.6.0's
+copy drop; the last column is the flattened check's time, against about
+8.7 s for the hierarchical batches of the sky130A sheet during the build
+[run]:
 
 | PDK | Error boxes, hierarchical / flat | Rules | Copies dropped | Top cell's boxes kept | Subcell boxes: in the top's check / flattened check only / information | Flattened check |
 |---|---|---|---|---|---|---|
@@ -464,6 +512,13 @@ sky130A sheet during the build [run]:
 | gf180mcuD | 252 / 277 | 33 | 165 | 23 | 173 / 56 / 0 | 0.7 s |
 | ihp-sg13g2 | 304 / 243 | 32 | 153 | 86 | 218 / 0 / 0 | not run |
 | ihp-sg13cmos5l | 91 / 66 | 18 | 34 | 32 | 59 / 0 / 0 | not run |
+
+On 0.6.2's code, the sheets of 0.6.1 (132, 69, 151 and 49 cases) give,
+hierarchical / flat: 351 / 334 boxes on sky130A, 248 / 281 on gf180mcuD,
+239 / 243 on ihp-sg13g2 and 66 / 66 on ihp-sg13cmos5l. Each hierarchical
+count is the top cell's own check (242, 192, 239 and 66 boxes) plus the
+subcell boxes that only the flattened check confirms (109, 56, 0 and 0);
+224, 177, 218 and 59 subcell boxes are in the top cell's check [run].
 
 **Categories.** Each why-text gets a category under its rule ID (`Magic
 DRC / diff/tap.8 / N-well overlap ...`), made only when it holds errors.
@@ -546,7 +601,12 @@ not match. `extfile.py` places each of these from the `.ext` files,
 through every `use` transform and array step up to the top cell [run,
 `test_extfile.py`]: a net at its `node` point, drawn as the net's shape
 under that point (a diffusion piece is cut at the gates) or as a 0.02 µm
-box; a device at its `device` point; a pin at its `port` box. The unit
+box; a device at its `device` point; a pin at its `port` box. netgen's
+JSON leaves out one pin: on the layout's "(no pins)" row of a pin table
+it gives "(no matching pin)" for the schematic pin that the text report
+names ("(no pins) | VPWR **Mismatch**"), so `netgen.report_pins` reads
+the report's "Subcircuit pins:" tables and `Circuit.pin_pairs` takes the
+name from there [run, `test_netgen.py`]. The unit
 is the job's `KMP_JOB_SCALE`, not the `.ext` file's `scale` line: for
 the same 0.005 µm on all four PDKs, that line's third number is 500000
 on sky130A and 0.5 on the others (measured in the image). A backend test
@@ -608,7 +668,7 @@ cross-cell findings (2.6), set the status to 1:
 |---|---|
 | `F1 implant or marker stops short/<layer>` | an implant or marker encloses a device shape by less than Magic's output grows that layer from it |
 | `F2 transistor Magic reads as another device or none` | a drawn gate that Magic extracts as another device, two, or none |
-| `F3 shape Magic drops/<layer>` | conductor, poly or diffusion Magic does not write back; cuts with no Magic cut over them |
+| `F3 shape Magic drops/<layer>` | conductor, poly or diffusion Magic does not write back; cuts with no Magic cut over them, and on sky130A a licon on diffusion with li over it but neither nsdm nor psdm under it; the item gives that cause |
 | `F4 conductor Magic adds/<layer>` | conductor Magic writes where none was drawn, such as from a pin box |
 | `F5 cuts Magic redrew (information)/<layer>` | cut groups Magic redrew; the text says whether Magic's own cuts meet the cut size and spacing |
 
@@ -625,7 +685,7 @@ parsed from the gdsii style [src]:
 
 | PDK | Layer: device shape and distance in µm (tech-file line) |
 |---|---|
-| sky130A | nsdm 93/44 and psdm 94/20: diffusion and tap, 0.125 (846, 845; 841, 840); npc 95/20: poly contact cut, 0.10 (1128); hvtp 78/44: hvt pfet gate, 0.18 (917); lvtn 125/44: lvt gate, 0.18 (892) |
+| sky130A | nsdm 93/44 and psdm 94/20: diffusion and tap, 0.125 (846, 845; 841, 840); npc 95/20: poly contact cut, 0.10 (1128); hvtp 78/44: hvt pfet gate, 0.18 (917); lvtn 125/44: lvt gate, 0.18 (892). Rules named: `n/psdm.5a` (diffusion), `n/psdm.5b` (tap), `licon.15`, `hvtp.3`, `lvtn.4b`, after SkyWater's periphery rules (google/skywater-pdk 7198cf6), which write the implant rules `n/ psd.5a` and `n/ psd.5b`; the plugin spells them as the PDK's `sky130A.lydrc` deck does |
 | gf180mcuD | nplus 32/0 and pplus 31/0: diffusion 0.16, tap 0.02, gate 0.23 (735, 739, 740; 784, 788, 789); dualgate 55/0: 5 V and 6 V diffusion, 0.24 (810, 811) |
 | ihp-sg13g2 | psd 14/0: p-diffusion 0.18, PMOS gate 0.30, p-tap 0.03 (cifout.tech:205, 206, 204); thkox 44/0: HV diffusion, 0.27 (390) |
 | ihp-sg13cmos5l | psd 14/0: as ihp-sg13g2 (cifout.tech:144, 145, 143); thkox 44/0: 0.27 (315) |
@@ -663,14 +723,22 @@ tech file's `labels` and `calma` lines and the KLayout LVS deck's
 a `*/16` pin layer, or over a box on one, as a port; KLayout's LVS reads
 names from `*/5`; both accept a `*/5` text over a `*/16` box of the same
 layer (except 65/5); and a text on li or met1 drawing names a net in
-Magic but makes no port. The findings are:
+Magic but makes no port. A text layer that Magic reads onto a type of the
+tech file's comment plane names no net: the builder lists it under
+`comment`, not `text` (sky130A's text.drawing 83/44; the IHP PDKs' 63/0,
+152/0 and 160/0), and such a text is no finding. Magic's netlist of
+`sky130_fd_sc_hd__inv_1` has no net named by its cell-name text on 83/44
+[run]. The findings are:
 
 - P1: a text that neither tool reads.
 - P2: a text that names a net in Magic but makes no port, so netgen
   fails pin matching.
 - P3: a Magic port that the KLayout deck can't name (gf180mcuD standard
   cells give it for VNW and VPW on 21/10 and 204/10).
-- P4: a pin box with no text.
+- P4: a pin box with no text, looking at texts on the pin's own layer
+  number and on the text layer that a `both` row pairs with the pin
+  (sky130A's pwell.label 64/59 for pwell.pin 122/16, where the standard
+  cells put VNB).
 - P5: a pin box with no drawing under it, which Magic turns into
   conductor and KLayout does not.
 - P6: a text over no shape of its layer, looking down the hierarchy.
@@ -773,11 +841,12 @@ was typed from the tech file, and each row cites its lines.
 
 `scripts/test.sh` runs the unit tests and the gap generator's tests, then
 `tests/backend` once per PDK [src]. On 0.6.1's code the 380 unit tests
-and the gap generator's 18 tests passed [run]. Two of the unit tests
+and the gap generator's 18 tests passed, and on 0.6.2's code 401 unit
+tests and the same 18 [run]. Two of the unit tests
 were skipped: they read a folder of saved netgen reports kept outside
-the repository, and run only when `KMP_NETGEN_EVIDENCE` names it. In the
-same run the backend tests ran 95 tests on sky130A in 144 s, 3 of them
-skipped [run]. The backend files for the 0.6 checks build their cases
+the repository, and run only when `KMP_NETGEN_EVIDENCE` names it. In
+0.6.1's run the backend tests ran 95 tests on sky130A in 144 s, 3 of them
+skipped, and in 0.6.2's run the same 95 in 150 s [run]. The backend files for the 0.6 checks build their cases
 with the case suite, in a temporary folder:
 
 | File | Tests | What they check |
@@ -871,7 +940,9 @@ step ran again on each PDK, one PDK at a time on 6 workers, and no check
 failed: sky130A ran 183 units of work and passed 1,834 checks, the two
 cases that 0.6.1 added accounting for the difference, and the other PDKs
 ran the same units of work and passed the same numbers of checks as in
-the full run [run].
+the full run [run]. On 0.6.2's code, after `--update-baseline` on sky130A
+and ihp-sg13g2 for the port check's changes (3.4), the full step passed
+the same numbers of checks on all four PDKs [run].
 
 ### 5.3 Mutations
 
@@ -959,8 +1030,8 @@ fired on their case (sky130A `licon.16`), and rules measured on other
 shapes. The review's minor findings gave these parts of 0.6: netgen's
 symmetry forms counted as matches (3.2); the flattening of instances that
 Magic rounds to 90° (2.6); the port table per layer and datatype (3.4);
-the copy drop (3.1), since 225 of the top cell's 261 sheet boxes equalled
-boxes of the flat listing; one category per why-text (3.1); F5's check of
+the copy drop (3.1; since 0.6.2 below the top cell only), since 225 of
+the top cell's 261 sheet boxes equalled boxes of the flat listing; one category per why-text (3.1); F5's check of
 Magic's own cuts (3.3); and the job cache key and commands (2.3).
 
 **6.7 Left out of 0.6:** tiling and the halo; reusing DRC results per
@@ -1031,8 +1102,9 @@ parts of the design [run]:
 All UNVERIFIED:
 
 - **DRC.** Which subcell errors Magic's top-cell check lists, and why it
-  misses others; whether the 25, 23, 86 and 32 top-cell boxes that the
-  copy drop keeps on the sheets (3.1) are clipped or split copies.
+  misses others; whether a subcell's error that is left out because it
+  touches another error of its rule in the top cell's list hides an error
+  (3.1).
   Whether the subcell classes of 3.1 hold beyond the case suite and one
   block. Whether Magic's GUI shows met1.6 inside the FET cells of a
   Magic-made inverter. Why Magic makes no cell from the ihp-sg13g2
@@ -1080,6 +1152,8 @@ All UNVERIFIED:
   real GUI under Xvfb, did not drive these: the Yes answer when a second
   check asks whether to cancel the first; Rerun of extraction,
   LVS, layers and ports reports, and of a `.lyrdb` written by the command
-  line; the selection-box area and a cell entered with descend; the LVS
-  dialog's Browse... button. How long `prepare()` blocks KLayout's main
-  thread while it exports a large layout.
+  line; the selection-box area and a cell entered with descend. For
+  0.6.2 the menu also ran under XFCE on a 1280 × 800 screen, driven with
+  xdotool; that run tried the LVS dialog's Browse... button. How long
+  `prepare()` blocks KLayout's main thread while it exports a large
+  layout.

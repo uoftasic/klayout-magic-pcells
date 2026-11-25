@@ -1301,18 +1301,8 @@
     "devices": []
    },
    "ports": {
-    "status": 1,
-    "findings": [
-     [
-      "P2",
-      "H_ptap_sublbl",
-      "63/0",
-      0.15,
-      0.25,
-      0.15,
-      0.25
-     ]
-    ],
+    "status": 0,
+    "findings": [],
     "magic_ports": null
    }
   },

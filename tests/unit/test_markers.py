@@ -160,6 +160,50 @@ class Database(unittest.TestCase):
         n = markers.add_magic_said(r, ["Warning: Calma reading is not undoable!", "", "KMP_JOB_DONE 1",
                                        "Warning: Calma reading is not undoable!"])
         self.assertEqual((n, r.count(markers.CAT_MAGIC_SAID)), (1, 1))
+        self.assertEqual(r.count_info(markers.CAT_MAGIC_SAID), 1)
+
+    def test_long_texts_go_in_lines(self):
+        """KLayout's Info pane shows each text value on a line of its own, does
+        not wrap it, and cuts it after 200 characters."""
+        f2 = ("The gate at (1.350, 1.300): it is outside nwell, but Magic reads it as sky130_fd_pr__pfet_01v8 "
+              "W 0.650 L 0.150. The gate has no nsdm over its diffusion, and Magic reads every such gate as a "
+              "pfet, whatever the well (sky130A.tech:2597). To fix it, draw nsdm (93/44) over the n-diffusion, "
+              "0.125 um past it.")
+        lines = markers.text_lines(f2)
+        self.assertEqual(" ".join(lines), f2)
+        self.assertTrue(all(len(ln) <= markers.LINE_WIDTH for ln in lines), lines)
+        self.assertEqual(lines[-1], "To fix it, draw nsdm (93/44) over the n-diffusion, 0.125 um past it.")
+        self.assertEqual(markers.text_lines("short (x.1)"), ["short (x.1)"])
+        r = Rdb("x", "", "", "inv")
+        it = r.item("F2 transistor Magic reads as another device or none", "inv", db.DBox(0, 0, 1, 1), f2)
+        values = [v.string() for v in it.each_value() if v.is_string()]
+        self.assertEqual(values, lines)
+        self.assertTrue(all(len(v) < 200 for v in values))
+        self.assertEqual(markers.item_text(it), f2)
+
+    def test_information_items_are_waived_and_visited(self):
+        """Items that are not findings of the check: KLayout's
+        browser shows them as waived, and a category of them in green."""
+        er = ExportResult()
+        er.klayout_top = "inv"
+        er.unread = [(95, 20, db.DBox(0, 0, 1, 1))]
+        er.offgrid = [("68/20 (met1.drawing)", db.DBox(2.001, 0, 2.001, 0))]
+        r = Rdb("x", "", "", "inv")
+        r.item("Magic DRC/li.5", "inv", db.DBox(0, 0, 1, 1), "li.5")
+        markers.add_export_findings(r, er, counted=(markers.CAT_OFFGRID,))
+        items = {r.db.category_by_id(it.category_id()).path(): it for it in r.db.each_item()}
+        unread = items["Export.'Magic does not read this layer'"]
+        self.assertIn("waived", unread.tags_str)
+        self.assertTrue(unread.is_visited())
+        for path in ("'Magic DRC'.'li.5'", "Export.'Magic snaps this shape to its 5 nm grid'"):
+            self.assertEqual(items[path].tags_str, "", path)
+            self.assertFalse(items[path].is_visited(), path)
+        self.assertEqual((r.count(), r.count_info()), (3, 1))
+        path = os.path.join(self.d, "w.lyrdb")
+        r.save(path)
+        back = markers.load(path)
+        tags = sorted(it.tags_str for it in back.each_item())
+        self.assertEqual(tags, ["", "", "waived"])
 
 
 if __name__ == "__main__":

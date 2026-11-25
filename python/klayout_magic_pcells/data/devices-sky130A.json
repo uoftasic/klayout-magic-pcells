@@ -348,7 +348,19 @@
     "li"
    ],
    "line": "sky130A.tech:1094, 1127, 3133-3227",
-   "why": "a licon becomes a contact only where li (67/20) is drawn over it"
+   "why": "a licon becomes a contact only where li (67/20) is drawn over it",
+   "implant": {
+    "over": [
+     "diff",
+     "tap"
+    ],
+    "any": [
+     "nsdm",
+     "psdm"
+    ],
+    "line": "sky130A.tech:3133-3227",
+    "why": "the cut has li over it, but the diffusion under it has neither nsdm nor psdm, and Magic makes a contact on diffusion or tap only where one of the two is drawn; with the implant drawn, the contact comes back"
+   }
   },
   "mcon": {
    "size_um": 0.17,

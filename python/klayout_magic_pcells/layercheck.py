@@ -62,6 +62,9 @@ CAT_DEVICES = "Devices Magic extracted (information)"
 CAT_JOB = "Job/failed"
 JOB_DESCRIPTION = "The check did not run; why, and what Magic said."
 COUNTED = ("F1", "F2", "F3", "F4")
+# The export's findings that set the status to 1 (design-0.6.md 3.3); the
+# others are information in this check's report.
+COUNTED_EXPORT = (markers.CAT_OFFGRID, markers.CAT_READS_AS, markers.CAT_CROSS_CELL)
 
 
 class LayerCheckError(Exception):
@@ -447,7 +450,12 @@ def compare(user, magic, devices, data, dev, cross_cell=(), dbu=None):
                 text += "; there is no %s at it" % " and no ".join(miss)
             small = cut.get("size_um") and min(box.width(), box.height()) < cut["size_um"] - TOL_UM
             why = cut.get("why_small") if small and cut.get("why_small") else cut.get("why")
-            if why:
+            imp = cut.get("implant")
+            if imp and not miss and not small and _lacks_implant(ev, pr, imp):
+                # The layers above and below are there: the diffusion under the cut has
+                # no implant, so Magic gives it no contact type.
+                text += ". %s (%s)" % (_cap(imp["why"]), imp.get("line", ""))
+            elif why:
                 text += ". %s (%s)" % (_cap(why), cut.get("line", ""))
             out["F3"].append({"check": "F3", "layer": name, "gds": list(ld), "box": box, "text": text})
         # F5: groups of nearby cuts where Magic's differ from the user's.
@@ -528,6 +536,17 @@ def compare(user, magic, devices, data, dev, cross_cell=(), dbu=None):
     return out
 
 
+def _lacks_implant(ev, cut, imp):
+    """True when the cut lies on a layer of ``imp["over"]`` (diffusion or
+    tap) and no layer of ``imp["any"]`` (the implants) touches it."""
+    over = db.Region()
+    for n in imp.get("over", []):
+        over += ev.named(n)
+    if over.interacting(cut).is_empty():
+        return False
+    return all(ev.named(n).interacting(cut).is_empty() for n in imp.get("any", []))
+
+
 def _pin_layers(data, ld):
     p = data.ports() if hasattr(data, "ports") else data.get("ports", {})
     return [tuple(x) for x in p.get("pin", []) if x[0] == ld[0] and tuple(x) != tuple(ld)]
@@ -541,12 +560,50 @@ def counted(findings):
 # -- the task ----------------------------------------------------------------
 
 class Outcome:
-    def __init__(self, status, rdb, summary, files=None, findings=None):
+    def __init__(self, status, rdb, summary, files=None, findings=None, headline=None):
         self.status = status
         self.rdb = rdb
         self.summary = summary
+        self.headline = headline    # the GUI message's plain first line
         self.files = files or {}
         self.findings = findings or {}
+
+
+_PLAIN = {
+    "F1": ("implant or marker that stops short", "implants or markers that stop short"),
+    "F2": ("transistor that Magic reads as another device or none",
+           "transistors that Magic reads as other devices or none"),
+    "F3": ("shape or cut that Magic drops", "shapes or cuts that Magic drops"),
+    "F4": ("conductor shape that Magic adds", "conductor shapes that Magic adds"),
+}
+
+
+def headline(findings, er, cell):
+    """The first line of the GUI's result message, in plain words: what the
+    findings that set the status are (F1 to F4, and the export's off-grid,
+    read-as-another-type and cross-cell findings), or that there are none."""
+    parts = []
+    for k in COUNTED:
+        items = [f for f in findings.get(k, []) if not f.get("info")]
+        if not items:
+            continue
+        one, many = _PLAIN[k]
+        part = "%d %s" % (len(items), one if len(items) == 1 else many)
+        if k in ("F1", "F3", "F4"):
+            part += " (%s)" % ", ".join(sorted({f["layer"] for f in items}))
+        parts.append(part)
+    if er is not None:
+        for n, one, many in ((len(er.offgrid), "vertex off Magic's grid", "vertices off Magic's grid"),
+                             (len(er.reads_as), "shape on a layer Magic reads as another type",
+                              "shapes on layers Magic reads as another type"),
+                             (len(er.cross_cell), "place where Magic reads a cell without a layer drawn in "
+                              "another cell", "places where Magic reads a cell without a layer drawn in "
+                              "another cell")):
+            if n:
+                parts.append("%d %s" % (n, one if n == 1 else many))
+    if not parts:
+        return "No generated-layer findings in %s." % cell
+    return "In %s: %s." % (cell, "; ".join(parts))
 
 
 def generator_for(params):
@@ -789,7 +846,7 @@ class Task(RwTask):
         """Magic read the cell as empty: the finding, status 1."""
         rdb = self._rdb()
         text = markers.add_reads_nothing(rdb, self.er, data=self.data)
-        markers.add_export_findings(rdb, self.er)
+        markers.add_export_findings(rdb, self.er, counted=COUNTED_EXPORT)
         markers.add_magic_said(rdb, self.magic_lines(result))
         findings = {"F1": [], "F2": [], "F3": [], "F4": [], "F5": [], "devices": [], "skipped": [],
                     "empty": [{"check": "empty", "layer": None, "box": self.er.bbox, "text": text}]}
@@ -799,7 +856,8 @@ class Task(RwTask):
         export = os.path.join(result.dir, "in.gds")
         if os.path.isfile(export):
             files["export"] = export
-        return Outcome(1, rdb, summary, files, findings)
+        return Outcome(1, rdb, summary, files, findings,
+                       headline="Magic reads nothing in %s, so there is nothing to compare." % self.er.klayout_top)
 
     def fail(self, why, result=None):
         return self.failed("layers", why, result)
@@ -820,13 +878,13 @@ class Task(RwTask):
         findings = compare(user, magic, devices, self.data, self.dev, self.er.cross_cell, ul.dbu)
         rdb = self._rdb()
         fill_rdb(rdb, findings, self.er.klayout_top)
-        markers.add_export_findings(rdb, self.er)
+        markers.add_export_findings(rdb, self.er, counted=COUNTED_EXPORT)
         n = counted(findings)
         f6 = len(self.er.offgrid) + len(self.er.reads_as) + len(self.er.cross_cell)
         status = 1 if (n or f6) else 0
         summary = summary_text(findings, self.er, self.data.pdk)
         files = dict(job_files(job_dir), **{"rw.gds": rw, "ext": ext, "export": self.export_path})
-        return Outcome(status, rdb, summary, files, findings)
+        return Outcome(status, rdb, summary, files, findings, headline(findings, self.er, self.er.klayout_top))
 
 
 _CAT = {"F1": CAT_F1, "F2": CAT_F2, "F3": CAT_F3, "F4": CAT_F4, "F5": CAT_F5}
@@ -851,11 +909,11 @@ def fill_rdb(rdb, findings, cell):
             else:
                 path = (_CAT[k], f["layer"])
             cat = rdb.category(path)
-            top = rdb.category((path[0],), _DESC.get(k, ""))
-            rdb.item(cat, cell, f["box"], f["text"])
+            rdb.category((path[0],), _DESC.get(k, ""))
+            rdb.item(cat, cell, f["box"], f["text"], info=k == "F5" or bool(f.get("info")))
     for d in findings.get("devices", []):
         rdb.item(rdb.category((CAT_DEVICES,), "Every device in Magic's extraction of its own flattened "
-                              "copy, with its model, W and L."), cell, d["box"], d["text"])
+                              "copy, with its model, W and L."), cell, d["box"], d["text"], info=True)
 
 
 def summary_text(findings, er, pdk):

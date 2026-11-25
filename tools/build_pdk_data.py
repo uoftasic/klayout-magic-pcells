@@ -807,11 +807,22 @@ def generated_row(name, p, row, parts, ov, canon, contacts, aliases):
 
 # -- ports ----------------------------------------------------------------------
 
-def build_ports(cifin, cifout, layers, lvs_labels, lvs_rel):
+def comment_types(canon, plane):
+    """The names of the Magic types on the tech file's ``comment`` plane,
+    which make no net: a label Magic puts on them names nothing in its
+    netlist (sky130A's text.drawing, measured on sky130_fd_sc_hd__inv_1)."""
+    on = {t for t, p in plane.items() if p == "comment"}
+    return {n for n, t in canon.items() if t in on} | on
+
+
+def build_ports(cifin, cifout, layers, lvs_labels, lvs_rel, comments=()):
     """The label convention: which GDS pairs make net names and ports in
     Magic (cifinput ``labels`` and ``calma`` lines), and which the PDK's
-    KLayout LVS deck reads (``labels(L, D)``)."""
-    text, pin, port_text = [], [], []
+    KLayout LVS deck reads (``labels(L, D)``). A pair whose labels Magic
+    puts only on types of the comment plane (``comments``; sky130A's
+    text.drawing, read as ``comment``) names no net, so it is in
+    ``comment`` and not in ``text``."""
+    text, pin, port_text, comment = [], [], [], []
     lines = collections.defaultdict(list)
     types = {}
     for cif, pairs in cifin["calma"].items():
@@ -833,8 +844,13 @@ def build_ports(cifin, cifout, layers, lvs_labels, lvs_rel):
                     port_text.append(list(p))
                 if u["paint"] and list(p) not in pin:
                     pin.append(list(p))
-            elif ("text" in kinds or "label" in kinds) and list(p) not in text:
-                text.append(list(p))
+            elif "text" in kinds or "label" in kinds:
+                mine = types[key(p)]
+                if mine and mine <= set(comments):
+                    if list(p) not in comment:
+                        comment.append(list(p))
+                elif list(p) not in text:
+                    text.append(list(p))
     kl = []
     for p, where in lvs_labels:
         if list(p) not in kl:
@@ -862,7 +878,7 @@ def build_ports(cifin, cifout, layers, lvs_labels, lvs_rel):
                         if list(p) not in out_ports:
                             out_ports.append(list(p))
     srt = lambda v: sorted(v)  # noqa: E731
-    return {"text": srt(text), "pin": srt(pin), "port_text": srt(port_text),
+    return {"text": srt(text), "pin": srt(pin), "port_text": srt(port_text), "comment": srt(comment),
             "klayout_lvs_text": srt(kl), "both": sorted(both, key=lambda b: b["text"]),
             "magic_writes_port": srt(out_ports), "klayout_lvs": lvs_rel,
             "lines": {k: ", ".join(dict.fromkeys(v)) for k, v in sorted(lines.items(),
@@ -977,7 +993,7 @@ def build(pdk, pdk_root, overrides=None):
         ("layers", layers),
         ("cifout", build_cifout(cifout, canon, contacts, aliases)),
         ("generated", build_generated(cifout, layers, canon, contacts, aliases, ov)),
-        ("ports", build_ports(cifin, cifout, layers, labels, lvs_rel)),
+        ("ports", build_ports(cifin, cifout, layers, labels, lvs_rel, comment_types(canon, plane))),
         ("lvs", {"netgen_setup": netgen if os.path.isfile(os.path.join(pdk_dir, netgen)) else None,
                  "klayout_lvs": lvs_rel}),
         ("error_marker", list(ERROR_MARKER)),

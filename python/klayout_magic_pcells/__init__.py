@@ -17,7 +17,7 @@ import logging
 import os
 import tempfile
 
-__version__ = "0.6.1"
+__version__ = "0.6.2"
 # The sky130A library's name, kept for code written against version 0.2.
 LIBRARY_NAME = "sky130_magic"
 
