@@ -209,6 +209,105 @@ class Export(unittest.TestCase):
         self.assertIsNone(export_cell(ly, bad, self.out(), mini_data(error_marker=[254, 0])).refusal())
 
 
+def _variant_library(name):
+    """A library with one PCell, NFET, that carries the plugin's hidden
+    parameter kmp_created and no cell_name_impl: KLayout names its variants
+    NFET, NFET$1, ..., as KLayout's GUI names the plugin's variants that it
+    loads into a view or places with the Instance tool."""
+    class Nfet(db.PCellDeclarationHelper):
+        def __init__(self):
+            super().__init__()
+            self.param("w", self.TypeDouble, "W", default=1.0)
+            self.param("kmp_created", self.TypeString, "Created with", hidden=True, default="kmp1;test")
+
+        def produce_impl(self):
+            self.cell.shapes(self.layout.layer(*M1)).insert(db.DBox(0, 0, self.w, 0.5))
+
+    lib = db.Library()
+    lib.description = "test"
+    lib.layout().register_pcell("NFET", Nfet())
+    lib.register(name)
+    return lib
+
+
+@needs_klayout
+class Variants(unittest.TestCase):
+    """The plugin's PCell variants go to Magic as <device>__kmp_<8 hex>,
+    whatever KLayout calls them."""
+
+    LIB = "kmp_test_variant_lib"
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp(prefix="kmp-variants-")
+        self.data = mini_data()
+        self.lib = _variant_library(self.LIB)
+
+    def tearDown(self):
+        if self.lib is not None:
+            self.lib.delete()
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def gui_layout(self):
+        """TOP with two NFET variants (named NFET and NFET$1) and a plain cell."""
+        ly = db.Layout()
+        ly.dbu = 0.001
+        top = ly.create_cell("TOP")
+        for i, w in enumerate((1.0, 2.0)):
+            v = ly.create_cell("NFET", self.LIB, {"w": w})
+            top.insert(db.DCellInstArray(v.cell_index(), db.DTrans(db.DVector(5.0 * i, 0))))
+        plain = ly.create_cell("PLAIN")
+        box(ly, plain, M1, 0, 0, 1, 1)
+        top.insert(db.DCellInstArray(plain.cell_index(), db.DTrans(db.DVector(0, 5))))
+        return ly, top
+
+    def test_live_variants_named_by_their_pcell(self):
+        ly, top = self.gui_layout()
+        self.assertEqual(sorted(c.name for c in ly.each_cell()), ["NFET", "NFET$1", "PLAIN", "TOP"])
+        r = export_cell(ly, top, os.path.join(self.d, "in.gds"), self.data)
+        self.assertRegex(r.name_map["NFET"], r"^NFET__kmp_[0-9a-f]{8}$")
+        self.assertRegex(r.name_map["NFET$1"], r"^NFET__kmp_[0-9a-f]{8}$")
+        self.assertNotEqual(r.name_map["NFET"], r.name_map["NFET$1"])
+        self.assertEqual(r.name_map["PLAIN"], "PLAIN")
+        self.assertEqual(set(r.variants), {"NFET", "NFET$1"})
+        self.assertEqual(r.renamed, {}, "not the cells renamed because Magic can't load their names")
+        self.assertEqual(r.klayout_name(r.name_map["NFET$1"]), "NFET$1")
+        back = read(os.path.join(self.d, "in.gds"))
+        self.assertEqual(sorted(c.name for c in back.each_cell()), sorted(r.name_map.values()))
+        self.assertEqual(export.variant_device(ly.cell("NFET$1")), "NFET")
+
+    def test_cold_variants_get_the_same_names(self):
+        """Saved with the context and read without the library (the command
+        line on a file saved from the GUI): the same names in the file."""
+        ly, top = self.gui_layout()
+        live = export_cell(ly, top, os.path.join(self.d, "live.gds"), self.data)
+        saved = os.path.join(self.d, "saved.gds")
+        ly.write(saved)
+        self.lib.delete()
+        self.lib = None
+        cold = read(saved)
+        self.assertTrue(cold.cell("NFET").is_cold_proxy())
+        r = export_cell(cold, cold.cell("TOP"), os.path.join(self.d, "cold.gds"), self.data)
+        self.assertEqual(r.name_map, live.name_map)
+        self.assertEqual(export.variant_device(cold.cell("NFET")), "NFET")
+        from klayout_magic_pcells.portcheck import device_cell
+        self.assertTrue(device_cell(cold.cell("NFET$1")), "a cold proxy is a device cell")
+
+    def test_kmp_names_and_other_cells_are_kept(self):
+        ly = db.Layout()
+        top = ly.create_cell("TOP")
+        v = ly.create_cell("NFET", self.LIB, {"w": 1.5})
+        ly.rename_cell(v.cell_index(), "NFET__kmp_0123abcd")
+        top.insert(db.DCellInstArray(v.cell_index(), db.DTrans()))
+        other = ly.create_cell("sky130_fd_pr__nfet_01v8")   # a plain cell named like a device: not a variant
+        box(ly, other, M1, 0, 0, 1, 1)
+        top.insert(db.DCellInstArray(other.cell_index(), db.DTrans(db.DVector(5, 0))))
+        r = export_cell(ly, top, os.path.join(self.d, "in.gds"), self.data)
+        self.assertEqual(r.name_map["NFET__kmp_0123abcd"], "NFET__kmp_0123abcd")
+        self.assertEqual(r.name_map["sky130_fd_pr__nfet_01v8"], "sky130_fd_pr__nfet_01v8")
+        self.assertEqual(r.variants, {})
+        self.assertEqual(export.variant_device(other), None)
+
+
 @needs_klayout
 class CrossCell(unittest.TestCase):
     """Magic decides device types inside each cell from that cell's own

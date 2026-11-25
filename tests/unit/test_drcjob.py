@@ -290,7 +290,7 @@ class Filing(unittest.TestCase):
         out = self.finish(self.unit({"SC": sc, "TOP": top}))
         self.assertEqual(out.rows, [("TOP", self.LU, (10000, 0, 10500, 500))])
         self.assertEqual(out.status, 1)
-        self.assertEqual(out.headline, "1 DRC error marker in TOP, rule LU.2.")
+        self.assertEqual(out.headline, "Magic counts 1 DRC error in TOP. The report has 1 error marker, rule LU.2.")
         cells = {out.rdb.db.cell_by_id(it.cell_id()).name() for it in out.rdb.db.each_item()}
         self.assertEqual(cells, {"TOP"})
         self.assertIn("1 is in the top cell's check (reported there)", out.summary)
@@ -310,6 +310,13 @@ class Filing(unittest.TestCase):
                [("T", "c (nwell.4)", (0, 0, 1, 1))]
         self.assertEqual(drcjob.headline(rows, 0, "datapath"),
                          "62 DRC error markers in datapath, 3 rules: LU.2 31, LU.3 30, nwell.4 1.")
+        # Magic's own count first: the number a script's "drc list count total" prints.
+        self.assertEqual(drcjob.headline(rows, 0, "datapath", count=32),
+                         "Magic counts 32 DRC errors in datapath. The report has 62 error markers, 3 rules: "
+                         "LU.2 31, LU.3 30, nwell.4 1.")
+        # An area check gives the markers alone.
+        self.assertEqual(drcjob.headline(rows[:1], 0, "datapath", area=True, count=32),
+                         "1 DRC error marker in the checked area of datapath, rule LU.2.")
         self.assertEqual(drcjob.headline([], 0, "drc_02", area=True), "No DRC errors in the checked area of drc_02.")
         self.assertEqual(drcjob.headline([], 0, "s", nothing=True),
                          "Magic reads nothing in s, so Magic DRC checked nothing.")

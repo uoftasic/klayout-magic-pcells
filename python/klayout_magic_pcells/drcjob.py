@@ -710,11 +710,14 @@ def _n(n, one, many):
     return "%d %s" % (n, one if n == 1 else many)
 
 
-def headline(rows, n_alone, what, area=False, nothing=False):
-    """The first line of the GUI's result message, in plain words: the error
-    markers per rule (``rows``: (cell, why, box)), or that there are none.
-    ``n_alone``: the boxes that are information only; ``area``: an area
-    check; ``nothing``: Magic reads nothing in the cells asked for."""
+def headline(rows, n_alone, what, area=False, nothing=False, count=None):
+    """The first line of the GUI's result message, in plain words: Magic's
+    own count of errors in the top cell (``count``, its ``drc list count
+    total``, the number a script that runs Magic's DRC prints), then the
+    error markers per rule (``rows``: (cell, why, box)); or that there are
+    none. ``n_alone``: the boxes that are information only; ``area``: an
+    area check, which gives the markers alone; ``nothing``: Magic reads
+    nothing in the cells asked for."""
     if nothing:
         return "Magic reads nothing in %s, so Magic DRC checked nothing." % what
     where = ("in the checked area of %s" if area else "in %s") % what
@@ -726,7 +729,11 @@ def headline(rows, n_alone, what, area=False, nothing=False):
     per = {}
     for _c, why, _b in rows:
         per[rule_id(why)] = per.get(rule_id(why), 0) + 1
-    head = "%s %s" % (_n(len(rows), "DRC error marker", "DRC error markers"), where)
+    if count is not None and not area:
+        head = "Magic counts %s %s. The report has %s" % (
+            _n(count, "DRC error", "DRC errors"), where, _n(len(rows), "error marker", "error markers"))
+    else:
+        head = "%s %s" % (_n(len(rows), "DRC error marker", "DRC error markers"), where)
     if len(per) == 1:
         return "%s, rule %s." % (head, next(iter(per)))
     top = sorted(per.items(), key=lambda kv: (-kv[1], kv[0]))
@@ -1189,11 +1196,13 @@ class Task:
             if lines and n_empty < len(self.units):
                 out.summary += " %s." % "; ".join(lines)
             out.headline = headline(out.rows, len(out.alone), what, area is not None,
-                                    nothing=n_empty == len(self.units))
+                                    nothing=n_empty == len(self.units),
+                                    count=sum(u.counts.get(u.er.top, 0) for u in self.units if u.er))
             # The reads-nothing item is under Export too; the head names it.
+            # The export's items don't count in DRC: they are information.
             export_n = rdb.count(CAT_EXPORT) - rdb.count(markers.CAT_READS_NOTHING)
             if export_n:
-                out.summary += " The export has %d finding%s (category Export)." % (
+                out.summary += " The report has %d note%s about the export (category Export, information)." % (
                     export_n, "" if export_n == 1 else "s")
         self._outcome = out
         if self._tmpdir:

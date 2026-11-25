@@ -13,7 +13,8 @@ it where the details are.
 
 The transcripts below were run on 2026-11-24 with version 0.6.0, and
 those whose output version 0.6.2 changes were run again with 0.6.2 on the
-same day. They and the screenshots come from the image
+same day; those whose output version 0.6.3 changes were run again with
+0.6.3 on 2026-11-25. They and the screenshots come from the image
 `hpretl/iic-osic-tools@sha256:3c371645b19c6f6564dc8c7b21e39ad1c1833d274fe5b85639afe1ba9d7987e7`
 (KLayout 0.30.11, Magic 8.3.681, netgen 1.5.323, sky130A from open_pdks
 026824c7), with the image's `PDK` variable set to `sky130A`. The repository
@@ -73,7 +74,7 @@ package under Current Packages:
 ![KLayout's Salt Package Manager, Current Packages tab, with klayout-magic-pcells 0.5.0 selected: its title, description and the licence Apache-2.0](docs/img/guide/salt-package.png)
 
 The screenshot was taken at version 0.5.0. The list shows the version that
-the package's `grain.xml` gives, which is 0.6.2 for this version.
+the package's `grain.xml` gives, which is 0.6.3 for this version.
 
 For this guide the package was installed with the link above and checked
 only in this list. Installing through the Package Manager's Install tab, or
@@ -407,8 +408,12 @@ shapes or cuts that Magic drops (licon1.drawing).", and below it the
 summary that the command line prints, sometimes with an extra line. The box is an
 information box when the check found nothing, a warning when it found
 something, and an error when the check failed. When you close it, the
-browser comes in front of the main window; it is a window of its own, which
-a maximised main window would otherwise cover. Two
+browser comes in front of the main window, and again when you close
+netgen's report or Magic's netlist; it is a window of its own, which a
+maximised main window would otherwise cover. When a report opens, the
+browser moves below the main window's menu bar if it covers it, so the
+Magic menu stays in reach, and if you maximised it for an earlier report,
+it comes back at its normal size. Two
 kinds of check end without a progress dialog: a check whose result is
 already in the [job cache](#job-directories) from an earlier run, and the
 port check, which doesn't start Magic. The browser's Rerun button (F5) runs
@@ -419,7 +424,8 @@ checks' reports wasn't tried.
 In the browser's Info pane, a finding's text is split into lines of at
 most 80 characters, a sentence or clause to a line, because the pane
 doesn't wrap a text and cuts a line after 200 characters. To read the
-lines whole, make the pane wider by dragging the splitter between
+lines whole, maximise the browser: the width it gains goes to the Markers
+and Info side. At its normal size you can also drag the splitter between
 Directory and Markers to the left. Items that are information and not
 findings, such as the export's notes in a DRC report or the device list
 of the generated-layer check, are marked waived: KLayout draws their
@@ -440,7 +446,10 @@ and `inverters`; a case is the file `<set>/<case>.gds`. The screenshots
 show them open in KLayout under the sky130A technology. The command-line
 transcripts of these sections were run on 2026-11-24 with version 0.6.0,
 and those of `drc` on hierarchical cases and of `layers` on `a_no_nsdm`
-again with version 0.6.2, through `scripts/in_image.sh`, which mounts the
+again with version 0.6.2; those of `drc` and `extract` that mention the
+export, and the transcript under [Job directories](#job-directories),
+ran again with version 0.6.3 on 2026-11-25. All ran through
+`scripts/in_image.sh`, which mounts the
 repository at `/repo` and sets `KMP_CACHE_DIR=/repo/out/cache`. The cases
 were built with
 
@@ -490,9 +499,9 @@ implants and well. The same check from the command line, in both modes:
 ```
 $ python3 -m klayout_magic_pcells drc inv_base_all_h.gds -o inv_base_all_h.lyrdb
 note: PDK sky130A, a guess from the PDK variable (PDK=sky130A): the layout names no technology and no PCell library; give --pdk to choose another
-Magic DRC (drc(full), hierarchical) of inv_base_all_h on sky130A: 36 error boxes, 7 rules, in 1 cell. inv_base_all_h: 36 error boxes; Magic's drc list count total 5 in the top cell, 7 over the 2 cells checked; of the 47 boxes the subcells' own checks list, 7 are in the top cell's check (reported there), 0 only in the flattened layout's check, 40 only when the subcell is checked on its own (information, not counted). The export has 9 findings (category Export).
+Magic DRC (drc(full), hierarchical) of inv_base_all_h on sky130A: 36 error boxes, 7 rules, in 1 cell. inv_base_all_h: 36 error boxes; Magic's drc list count total 5 in the top cell, 7 over the 2 cells checked; of the 47 boxes the subcells' own checks list, 7 are in the top cell's check (reported there), 0 only in the flattened layout's check, 40 only when the subcell is checked on its own (information, not counted). The report has 9 notes about the export (category Export, information).
 $ python3 -m klayout_magic_pcells drc inv_base_all_h.gds --mode flat
-Magic DRC (drc(full), flat) of inv_base_all_h on sky130A: no errors. inv_base_all_h: 0 error boxes; Magic's drc list count total 0 in the top cell. The export has 1 finding (category Export).
+Magic DRC (drc(full), flat) of inv_base_all_h on sky130A: no errors. inv_base_all_h: 0 error boxes; Magic's drc list count total 0 in the top cell. The report has 1 note about the export (category Export, information).
 ```
 
 The hierarchical check exits 1, the flat one 0. The browser shows the
@@ -514,7 +523,7 @@ decks. A line names its row when the row's rule ID isn't the one that
 Magic prints: sky130A's Magic prints `hvi.5` for a spacing that SkyWater's
 rules call `hvi.2a`, and that message's line reads
 `Gap table: both (row hvi.2a); KLayout: sky130A_mr.drc: hvi.2a (0.7); sky130A.lydrc: hvi.2 (0.7)`.
-In the screenshot, taken with version 0.6.2, the Info pane gives the
+In the screenshot, taken with version 0.6.3, the Info pane gives the
 description of nwell.2a, with `GDS layers: 64/20 (nwell.drawing), 82/44
 (pnp.drawing)` and its `Gap table:` line. Export and the cell
 `inv_base_all_dev` are in green: they hold only information (see [The
@@ -560,7 +569,7 @@ there is no note:
 
 ```
 $ python3 -m klayout_magic_pcells drc inv_pcell.gds -o inv_pcell.lyrdb
-Magic DRC (drc(full), hierarchical) of inv_pcell on sky130A: no errors. inv_pcell: 0 error boxes; Magic's drc list count total 0 in the top cell, 6 over the 3 cells checked; of the 6 boxes the subcells' own checks list, 0 are in the top cell's check (reported there), 0 only in the flattened layout's check, 6 only when the subcell is checked on its own (information, not counted). The export has 12 findings (category Export).
+Magic DRC (drc(full), hierarchical) of inv_pcell on sky130A: no errors. inv_pcell: 0 error boxes; Magic's drc list count total 0 in the top cell, 6 over the 3 cells checked; of the 6 boxes the subcells' own checks list, 0 are in the top cell's check (reported there), 0 only in the flattened layout's check, 6 only when the subcell is checked on its own (information, not counted). The report has 12 notes about the export (category Export, information).
 ```
 
 It exits 0. The two transistor cells, checked on their own, have three
@@ -604,7 +613,7 @@ check. `gaps/s_npc_alone` is one npc rectangle:
 
 ```
 $ python3 -m klayout_magic_pcells drc s_npc_alone.gds
-Magic DRC (drc(full), hierarchical) of s_npc_alone on sky130A: Magic reads nothing in s_npc_alone, so nothing was checked (category Export/Magic reads nothing in this cell). The export has 1 finding (category Export).
+Magic DRC (drc(full), hierarchical) of s_npc_alone on sky130A: Magic reads nothing in s_npc_alone, so nothing was checked (category Export/Magic reads nothing in this cell). The report has 1 note about the export (category Export, information).
 $ python3 -m klayout_magic_pcells layers s_npc_alone.gds
 layers on sky130A, cell s_npc_alone: F1 0, F2 0, F3 0, F4 0; F5 0 (information); 0 devices in Magic's extraction; export: 0 off grid, 1 on unread layers, 0 read as another type, 0 cross-cell; Magic reads nothing in cell s_npc_alone. Its layers: 95/20 (npc.drawing): Magic's reader ignores it (and draws its own when it writes GDS) (sky130A.tech:3979), so there is nothing to compare (category Export/Magic reads nothing in this cell)
 Export: Magic reads nothing in cell s_npc_alone. Its layers: 95/20 (npc.drawing): Magic's reader ignores it (and draws its own when it writes GDS) (sky130A.tech:3979)
@@ -635,11 +644,11 @@ coordinates:
 
 ```
 $ python3 -m klayout_magic_pcells drc inv_base_all_h.gds
-Magic DRC (drc(full), hierarchical) of inv_base_all_h on sky130A: 36 error boxes, 7 rules, in 1 cell. inv_base_all_h: 36 error boxes; Magic's drc list count total 5 in the top cell, 7 over the 2 cells checked; of the 47 boxes the subcells' own checks list, 7 are in the top cell's check (reported there), 0 only in the flattened layout's check, 40 only when the subcell is checked on its own (information, not counted). The export has 9 findings (category Export).
+Magic DRC (drc(full), hierarchical) of inv_base_all_h on sky130A: 36 error boxes, 7 rules, in 1 cell. inv_base_all_h: 36 error boxes; Magic's drc list count total 5 in the top cell, 7 over the 2 cells checked; of the 47 boxes the subcells' own checks list, 7 are in the top cell's check (reported there), 0 only in the flattened layout's check, 40 only when the subcell is checked on its own (information, not counted). The report has 9 notes about the export (category Export, information).
 $ time python3 -m klayout_magic_pcells drc inv_base_all_h.gds --box -0.592,0,1.592,1.5
-Magic DRC (drc(full), hierarchical) of inv_base_all_h on sky130A in the area -0.592,0,1.592,1.5 um: 11 error boxes, 4 rules, in 1 cell. inv_base_all_h: 11 error boxes; Magic's drc list count total 5 in the top cell, 7 over the 2 cells checked; of the 9 boxes the subcells' own checks list, 1 is in the top cell's check (reported there), 0 only in the flattened layout's check, 8 only when the subcell is checked on its own (information, not counted). The export has 9 findings (category Export).
+Magic DRC (drc(full), hierarchical) of inv_base_all_h on sky130A in the area -0.592,0,1.592,1.5 um: 11 error boxes, 4 rules, in 1 cell. inv_base_all_h: 11 error boxes; Magic's drc list count total 5 in the top cell, 7 over the 2 cells checked; of the 9 boxes the subcells' own checks list, 1 is in the top cell's check (reported there), 0 only in the flattened layout's check, 8 only when the subcell is checked on its own (information, not counted). The report has 9 notes about the export (category Export, information).
 
-real	0m0.161s
+real	0m0.158s
 ```
 
 The area is the one that the view of the screenshot showed. The second
@@ -659,7 +668,8 @@ layout file and cell in `state.json`. Browse... lists every SPICE file of
 the folder, the netlists that Extract with Magic wrote there
 (`<cell>.magic.spice`) among them; when you choose one of those, the
 dialog asks whether to use it anyway, since LVS would then compare
-Magic's netlist with itself. The check extracts the cell with
+Magic's netlist with itself. OK is the default button: Return runs the
+check, also right after Browse.... The check extracts the cell with
 Magic, as Extract with Magic does, and has netgen compare that netlist with
 the subcircuit, using the PDK's netgen setup file. The layout here is
 `inverters/inv_open_drain`, the hand-drawn inverter with its Y wire cut
@@ -672,7 +682,10 @@ A net that netgen could not pair is marked with the shape that lies at the
 point Magic's `.ext` file gives for the net: here the NMOS drain's
 diffusion to the right of the gate, which Magic names `a_300_260#`.
 netgen's report opens in a window of its own, scrolled to its end, where
-netgen's final result is. From the command line:
+netgen's final result is. Its title says what was compared, here
+"netgen's report: inv_open_drain against inv_open_drain in
+inv_open_drain.spice". When you close it, the browser comes in front
+again. From the command line:
 
 ```
 $ python3 -m klayout_magic_pcells lvs inv_open_drain.gds --schematic inv_open_drain.spice -o inv_open_drain.lyrdb --report inv_open_drain.lvs.txt
@@ -714,15 +727,15 @@ plugin didn't write:
 
 ```
 $ python3 -m klayout_magic_pcells extract inv_open_drain.gds --caps
-extract: Magic extracted inv_open_drain (with parasitic capacitance, sky130A) into /repo/out/cases/sky130A/inverters/inv_open_drain.magic.pex.spice. The report has 1 item about the export.
+extract: Magic extracted inv_open_drain (with parasitic capacitance, sky130A) into /repo/out/cases/sky130A/inverters/inv_open_drain.magic.pex.spice. The report has 1 note about the export (category Export, information).
 netlist: /repo/out/cases/sky130A/inverters/inv_open_drain.magic.pex.spice
   Export/Magic does not read this layer: 1 item
 $ head -3 inv_open_drain.magic.pex.spice
-* Written by klayout_magic_pcells 0.6.0: Magic's netlist of inv_open_drain (with parasitic capacitance, sky130A) from /repo/out/cases/sky130A/inverters/inv_open_drain.gds
+* Written by klayout_magic_pcells 0.6.3: Magic's netlist of inv_open_drain (with parasitic capacitance, sky130A) from /repo/out/cases/sky130A/inverters/inv_open_drain.gds
 * NGSPICE file created from inv_open_drain.ext - technology: sky130A
 $ printf "* my own netlist\n" > inv_open_drain.magic.spice
 $ python3 -m klayout_magic_pcells extract inv_open_drain.gds --rdb inv_open_drain.extract.lyrdb
-extract: Magic extracted inv_open_drain (netlist only, sky130A). The report has 1 item about the export.
+extract: Magic extracted inv_open_drain (netlist only, sky130A). The report has 1 note about the export (category Export, information).
 error: /repo/out/cases/sky130A/inverters/inv_open_drain.magic.spice exists and klayout_magic_pcells did not write it (its first line is not "* Written by klayout_magic_pcells ..."); pass -o OUT.spice to write the netlist elsewhere, or -o /repo/out/cases/sky130A/inverters/inv_open_drain.magic.spice to overwrite it
 ```
 
@@ -782,10 +795,10 @@ without Magic:
 | P1 text neither Magic nor KLayout's LVS reads | a text on a layer that neither tool reads |
 | P2 text names a net in Magic but makes no port | a text that names a net in Magic without making it a port; netgen matches pins by Magic's ports, so pin matching fails |
 | P3 Magic port KLayout's LVS can't name | a text that Magic makes a port, on a layer the KLayout deck doesn't read net names from |
-| P4 pin box with no text | a pin box without a text over it |
+| P4 pin box with no text | a pin box without a text over it, unless the conductor it sits on holds a pin box of that layer that has one |
 | P5 pin box with no drawing under it | a pin box that Magic reads as conductor and KLayout's decks don't |
 | P6 text over no shape of its layer | a text over no shape of its conductor layer |
-| P7 texts inside device cells | texts inside PCell or library cells on a layer that KLayout's LVS reads, whose flat LVS joins every net of that name |
+| P7 texts inside device cells | texts inside PCell or library cells on a layer that KLayout's LVS reads, whose flat LVS joins every net of that name; information, which doesn't set the exit status |
 | P8 pin missing from Magic's subcircuit ports | a pin text of the top cell that is missing from the ports of the subcircuit Magic extracts; only `ports --magic` on the command line checks it |
 
 `inverters/inv_texts_only.gds` isn't one of the case suite's files:
@@ -1093,10 +1106,10 @@ tmp-* directory. That directory is removed once the results have been
 read: when the command ends, in KLayout once the report is shown, and at
 the latest when the process exits. `KMP_JOB_KEEP=1` keeps it, for a look
 at Magic's files. An LVS run's `lvs-<random>` folder in an extraction's
-key directory is removed the same way. In KLayout the title of netgen's
-report window gives the report's path in that folder, and the DRC
-report's description says "(removed when the check ends; KMP_JOB_KEEP=1
-keeps it)" after a path in a tmp-* directory.
+key directory is removed the same way, so in KLayout the title of
+netgen's report window names the cell, the subcircuit and the schematic,
+not the report's path, and the DRC report's description says "(removed when the
+check ends; KMP_JOB_KEEP=1 keeps it)" after a path in a tmp-* directory.
 
 The transcript below was run through `scripts/in_image.sh`, like those of
 the Magic menu's sections. Two tmp-* directories stayed, one for each
@@ -1105,21 +1118,22 @@ until `cache prune` removed them:
 
 ```
 $ KMP_JOB_KEEP=1 python3 -m klayout_magic_pcells drc inv_base_all_h.gds --no-cache
-Magic DRC (drc(full), hierarchical) of inv_base_all_h on sky130A: 36 error boxes, 7 rules, in 1 cell. inv_base_all_h: 36 error boxes; Magic's drc list count total 5 in the top cell, 7 over the 2 cells checked; of the 47 boxes the subcells' own checks list, 7 are in the top cell's check (reported there), 0 only in the flattened layout's check, 40 only when the subcell is checked on its own (information, not counted). The export has 9 findings (category Export).
+Magic DRC (drc(full), hierarchical) of inv_base_all_h on sky130A: 36 error boxes, 7 rules, in 1 cell. inv_base_all_h: 36 error boxes; Magic's drc list count total 5 in the top cell, 7 over the 2 cells checked; of the 47 boxes the subcells' own checks list, 7 are in the top cell's check (reported there), 0 only in the flattened layout's check, 40 only when the subcell is checked on its own (information, not counted). The report has 9 notes about the export (category Export, information).
 $ ls /repo/out/cache/jobs/sky130A/drc
-33b426d4a4f435e083d48b7680c442798fefca634f67979cdcced6c0510965c5
-8d14d65f12c8454014992907261531cc292eb57d5e4c197ae005880d5ab83207
-bb60dda949db00ff7eede68ad9d0722f3c136eb036f2a6601e51ab928bd96e0c
-e6b579b88e02c5234797b91e91f4d6def5f976389942af22ff5f6319ff2139b3
-tmp-7poqjf8e
-tmp-h3mg2toj
+00691910f49428b2fb8df80ffa39e10642720d2db972b4fd9c1fd0f7887aea27
+15441814466ae6669fb2605227ab39cd48393fe03e1923192e2795b73c70626d
+20fef35b3847ff3a641c659a3937708f4422748e09e891476fd4822ad8d82684
+451bfb5f3185f9dd5193d061a7026516f81370db49c01b213dfc754935fc6888
+a528f940a965124032f4cd940f9c5984ff5d2b72a5a79fe538f6939a2ca5cb32
+tmp-ky4l6ug8
+tmp-vbil_rs5
 $ python3 -m klayout_magic_pcells cache prune --pdk sky130A
-removed /repo/out/cache/jobs/sky130A/drc/tmp-7poqjf8e
-removed /repo/out/cache/jobs/sky130A/drc/tmp-h3mg2toj
+removed /repo/out/cache/jobs/sky130A/drc/tmp-ky4l6ug8
+removed /repo/out/cache/jobs/sky130A/drc/tmp-vbil_rs5
 {
  ...
- "jobs": 7,
- "jobs_bytes": 48487,
+ "jobs": 10,
+ "jobs_bytes": 53742,
  "root": "/repo/out/cache"
 }
 ```
@@ -1154,10 +1168,10 @@ picks one PDK, `--quick` sweeps only each generator's defaults, and
 sky130A below, on 2026-11-24 with version 0.6.0, took 6 minutes 57
 seconds, 3 minutes 7 seconds of them in the DRC step. This is its console
 output, without the `[INFO]` lines the image prints when a container
-starts. Version 0.6.2 has 401 unit tests and 132 sky130A gaps cases, so
-a run of it prints `'ran': 401` and `gaps=132` where this one prints 378
-and 130; the README's [Last full run](README.md#last-full-run) lists the
-checks that passed on 0.6.1 and on 0.6.2:
+starts. Version 0.6.3 has 409 unit tests, 96 backend tests and 132
+sky130A gaps cases, so a run of it prints `'ran': 409`, `'ran': 96` and
+`gaps=132` where this one prints 378, 95 and 130; the README's [Last full run](README.md#last-full-run) lists the
+checks that passed on 0.6.1, 0.6.2 and 0.6.3:
 
 ```
 $ scripts/parity.sh --pdk sky130A --quick

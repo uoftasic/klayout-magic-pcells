@@ -42,7 +42,7 @@ import shutil
 import tempfile
 
 from . import extfile, jobs, markers, netgen
-from .export import ExportError, export_cell
+from .export import ExportError, export_cell, variant_device
 
 SCRIPT = "kmp_extract.tcl"
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -62,7 +62,6 @@ CAT_UNPLACED = "Extraction/nets without a position"
 CAT_PORTS_FROM_LABELS = "Extraction/every label made a port"
 CAT_JOB = "Job/failed"
 
-_VARIANT = re.compile(r"^(.+)__kmp_[0-9a-f]{8}(?:\$\d+)?$")
 _DESCRIPTIONS = {
     CAT_RESULT: "netgen's final result and why the layout fails, as netgen printed it.",
     CAT_LAYOUT_ONLY: "Nets of Magic's netlist that netgen could not pair with a schematic net, "
@@ -438,7 +437,8 @@ class Task:
                 summary += (" %d placed PCell variant%s hold a device Magic's GDS reader does not keep."
                             % (n_readback, "" if n_readback == 1 else "s"))
             if n_export:
-                summary += " The report has %d item%s about the export." % (n_export, "" if n_export == 1 else "s")
+                summary += " The report has %d note%s about the export (category Export, information)." % (
+                    n_export, "" if n_export == 1 else "s")
             head = "Magic extracted %s (%s)." % (self.export.klayout_top, kind)
             if n_readback:
                 head += (" %d placed PCell variant%s hold a device that Magic's GDS reader does not keep."
@@ -731,18 +731,18 @@ class Task:
         top = self.cell if not isinstance(self.cell, str) else self.layout.cell(self.cell)
         cat = None
 
-        def listed(name):
-            m = _VARIANT.match(name)
-            return rows.get(m.group(1)) if m else None
+        def listed(cell):
+            device = variant_device(cell)
+            return rows.get(device) if device else None
 
         hits = []
-        row = listed(top.name)
+        row = listed(top)
         if row:
             hits.append((top.name, top.dbbox(), row))
         it = top.begin_instances_rec()
         while not it.at_end():
             child = it.inst_cell()
-            row = listed(child.name)
+            row = listed(child)
             if row:
                 t = it.dtrans() * it.inst_dtrans()
                 hits.append((child.name, child.dbbox().transformed(t), row))

@@ -176,6 +176,48 @@ def texts_only(src, dst, top):
     ly.write(dst, o)
 
 
+def pcell_inverter(test):
+    """The case suite's inverter built from the plugin's PCells (built once):
+    (its file, the folder of the build)."""
+    out_dir = os.path.join(OUT, "pcell")
+    path = os.path.join(out_dir, "inverters", "inv_pcell.gds")
+    if not os.path.isfile(path):
+        p = subprocess.run([sys.executable, os.path.join(REPO, "tests", "cases", "build.py"), "--pdk", PDK,
+                            "--out", out_dir, "--set", "inverters"], stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, universal_newlines=True)
+        test.assertTrue(os.path.isfile(path), p.stdout)
+    return path, out_dir
+
+
+def gui_saved(dst):
+    """The case suite's PCell inverter as KLayout's GUI saves it: each
+    variant of the plugin's PCells named by its PCell alone (a second one
+    with "$1") and the context kept. Returns {GUI name: the name a script
+    gives it}."""
+    import klayout_magic_pcells as kmp
+    from tests.cases.build import pdk_module
+    from tests.cases.common import new_layout
+    if kmp.register(PDK, cfg=CFG) is None:
+        raise unittest.SkipTest("the plugin's library did not register")
+    ly = new_layout()
+    top = pdk_module(PDK).pcell_inverter(db, ly)
+    names = {}
+    for c in list(ly.each_cell()):
+        m = re.match(r"^(.+)__kmp_[0-9a-f]{8}$", c.name)
+        if m and c.is_pcell_variant():
+            device = m.group(1)
+            new, i = device, 1
+            while ly.cell(new) is not None:
+                new, i = "%s$%d" % (device, i), i + 1
+            names[new] = c.name
+            ly.rename_cell(c.cell_index(), new)
+    o = db.SaveLayoutOptions()
+    o.write_context_info = True
+    o.select_cell(top.cell_index())
+    ly.write(dst, o)
+    return names, top.name
+
+
 def _ports(spice, name):
     """The pins of ``.subckt name`` in a SPICE file."""
     with open(spice, encoding="utf-8") as f:
@@ -256,12 +298,7 @@ class LvsTest(unittest.TestCase):
     def test_property_error_inside_a_pcell(self):
         """A device inside a PCell variant that netgen flattened is marked at
         its place in the top cell, through the use transform."""
-        out_dir = os.path.join(OUT, "pcell")
-        p = subprocess.run([sys.executable, os.path.join(REPO, "tests", "cases", "build.py"), "--pdk", PDK,
-                            "--out", out_dir, "--set", "inverters"], stdout=subprocess.PIPE,
-                           stderr=subprocess.STDOUT, universal_newlines=True)
-        path = os.path.join(out_dir, "inverters", "inv_pcell.gds")
-        self.assertTrue(os.path.isfile(path), p.stdout)
+        path, out_dir = pcell_inverter(self)
         with open(os.path.join(out_dir, "inverters", "inv_pcell.spice")) as f:
             lines = f.read().splitlines()
         nmos = next(i for i, ln in enumerate(lines) if any(m in ln for m in NMOS))
@@ -285,6 +322,34 @@ class LvsTest(unittest.TestCase):
                 bb = inst.dbbox()
                 inside.append(bb.left <= cx <= bb.right and bb.bottom <= cy <= bb.top)
         self.assertEqual(inside, [True], "the marker lies in the NMOS variant's placement")
+
+    def test_a_layout_saved_from_the_gui(self):
+        """KLayout's GUI saves the variants under their PCell's name; Magic
+        would make each a subcircuit named like its device's model, which
+        netgen can't use ("Call to undefined subcircuit"). The export gives
+        them __kmp_ names, so LVS matches and the netlist's subcircuits are
+        the variants'."""
+        _src, out_dir = pcell_inverter(self)
+        path = os.path.join(out_dir, "inv_pcell_gui.gds")
+        names, top = gui_saved(path)
+        self.assertEqual(top, "inv_pcell")
+        self.assertTrue(names, "the inverter has PCell variants")
+        self.assertFalse([n for n in names if "__kmp_" in n])
+        self.assertTrue(all("__kmp_" in n for n in names.values()))
+        sch = os.path.join(out_dir, "inverters", "inv_pcell.spice")
+        task, out = run("lvs", path, "inv_pcell", schematic=sch, no_cache=True)
+        self.assertEqual(out.status, 0, out.summary)
+        self.assertTrue(out.verdict.matched, out.summary)
+        self.assertEqual(sorted(task.export.variants), sorted(names))
+        task, out = run("extract", path, "inv_pcell", no_cache=True)
+        self.assertEqual(out.status, 0, out.summary)
+        with open(out.files["netlist"]) as f:
+            subckts = [ln.split()[1] for ln in f if ln.lower().startswith(".subckt")]
+        # Magic writes no subcircuit for a variant without a device
+        # (ihp-sg13cmos5l's subconn), so the netlist names a subset of them.
+        others = [s for s in subckts if s != "inv_pcell"]
+        self.assertTrue(others, subckts)
+        self.assertLessEqual(set(others), set(task.export.variants.values()))
 
     def test_two_lvs_runs_on_one_extraction_keep_their_own_reports(self):
         # A cached extraction's directory is shared: netgen used to run in its
@@ -448,6 +513,12 @@ class ReadbackMarkerTest(unittest.TestCase):
         for got, exp in zip(boxes, want):
             for g, e in zip(got, exp):
                 self.assertAlmostEqual(g, e, 3)
+        # Named by its PCell alone, as KLayout's GUI names it: the same markers.
+        ly.rename_cell(var.cell_index(), dev)
+        task = lvsjob.prepare(ly, top, CFG, pdkdata.load(PDK), {"cmd": "extract", "no_cache": True})
+        out = task.start().wait()
+        hits = [f for f in out.findings if f["category"] == lvsjob.CAT_READBACK]
+        self.assertEqual(len(hits), 2, out.findings)
 
 
 if __name__ == "__main__":

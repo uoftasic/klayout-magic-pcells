@@ -26,9 +26,9 @@ Claims carry a tag, as in `docs/design.md`:
 - **[run]**: run with the 0.6 code or its tests in the pinned image
   `hpretl/iic-osic-tools@sha256:3c371645b19c6f6564dc8c7b21e39ad1c1833d274fe5b85639afe1ba9d7987e7`
   (Magic 8.3.681, KLayout 0.30.11, Netgen 1.5.323), either while the 0.6
-  code was being written (*the build* below), on 0.6.0, 0.6.1 or 0.6.2,
-  as the text says; a quoted command output is from 0.6.0 unless the text
-  says otherwise.
+  code was being written (*the build* below), on 0.6.0, 0.6.1, 0.6.2 or
+  0.6.3, as the text says; a quoted command output is from 0.6.0 unless
+  the text says otherwise.
 - **[src]**: read from the code.
 - **UNVERIFIED**: neither. Section 7 collects these.
 
@@ -268,12 +268,33 @@ browser and a message box gives the outcome's `headline`, a first line in
 plain words that each check builds (`drcjob.headline`,
 `layercheck.headline`, `portcheck.headline`, `lvsjob.lvs_headline`), and
 below it the summary. After LVS the message gets no line that names
-netgen's report, since the report's window title does. Closing the message calls `raise_browser()`,
-which raises the visible `MarkerBrowserDialog` windows: KLayout's browser
-has no parent window, and under XFCE a maximised main window that gets the
-focus back from the message covered it (seen under XFCE on a 1280 × 800
-screen, with KLayout 0.30.11 and 0.6.1's code; 0.6.2's raise was checked
-there too). The text
+netgen's report, and the report's window is titled with what was compared
+(`report_title`: "netgen's report: <cell> against <subcircuit> in
+<schematic file>"), since the report's file is in the job cache and goes
+when the check ends. Closing the message calls `raise_browser()`, which
+raises the visible `MarkerBrowserDialog` windows: KLayout's browser has no
+parent window, and under XFCE a maximised main window that gets the focus
+back from the message covered it (seen under XFCE on a 1280 × 800 screen,
+with KLayout 0.30.11 and 0.6.1's code; 0.6.2's raise was checked there
+too). Closing netgen's report or Magic's netlist window raises it too
+(0.6.3). 300 ms after `show_rdb`, once Qt has shown the browser,
+`place_browser()` (0.6.3) sets it up: if it is maximised (KLayout keeps
+that state for the session) it calls `showNormal()`, and for a browser
+that comes back at the screen's size it asks for 560 × 600 in Qt's
+pixels (about 585 × 625 on that screen), centred below the menu bar; a
+browser whose
+frame overlaps the main window's menu bar (a child `QMenuBar`; `pya`'s
+`MainWindow` gives no `menuBar()`) moves below it, where at KLayout's
+default frame it covered the Magic menu; and the horizontal splitter that
+holds `directory_tree` gets stretch factors 0 and 1 and a Directory pane
+of at most 300 px, since KLayout gave the width of a maximised browser to
+the Directory pane and left the Info pane about 270 px wide at 1280 × 800.
+netgen's report, Magic's netlist window and Rule differences
+(`show_text`) move below the menu bar the same way. In the LVS dialog OK is the default button and Browse... is not
+an auto-default one, so Return runs the check after Browse...; the dialog
+opens over the middle of the main window. The problems were seen under
+XFCE on a 1280 × 800 screen with 0.6.2's code, and the fixes with
+0.6.3's [run]. The text
 windows and Settings open no larger than the screen's free area and have a
 maximise button (`fit_size`, `_resizable`). Then the tmp-* job
 directories are released. The DRC dialog's choices are kept in `state.json` beside
@@ -328,6 +349,24 @@ flattens instances that are magnified or rotated by other than a
 multiple of 90° (Magic rounds a 45° instance to 90°, measured in the
 image). It renames cells whose names are not made of `[A-Za-z0-9_$]` and
 keeps a map of the renames, and in flat mode it flattens the top cell.
+Since 0.6.3 it also writes each variant of the plugin's PCells as
+`<device>__kmp_<8 hex>` (`ExportResult.variants`), finding it by the
+hidden parameter `kmp_created` on a library proxy or a cold proxy; one
+that has such a name keeps it, and another gets a hash of its
+parameters. A layout loaded into a KLayout view, or one whose PCells the
+Instance tool placed, names each variant by its PCell alone
+(`sky130_fd_pr__nfet_01v8`; KLayout adds `$1` to a second cell of one
+name), while a
+`pya.Layout` that reads the same file in the same process keeps its
+`__kmp_` names, and `create_cell(pcell, library, parameters)` gives the
+`cell_name_impl` name [run]. File > Save writes the view's names, with
+the same context information. Magic then made each variant a subcircuit
+named like its device's model, holding a device of that model, and
+netgen stopped with "Call to undefined subcircuit sky130_fd_pr__pfet_01v8_hvt"
+and "Cannot find cell" for the top cell [run, 0.6.2]. Read on the
+command line without the library, such a file's variants are cold
+proxies with the plain names; the port check counts every proxy as a
+device cell, so their texts are P7 items, which are information (3.4).
 From the layer table in the PDK's data file (4), it lists in every
 check's RDB what Magic will change without giving an error:
 
@@ -413,7 +452,16 @@ which Magic made no cell; both are listed by KLayout name in
 flattened copy; the plugin calls its result "Magic's verdict on the
 flattened mask". Every RDB gives Magic's `drc list count total`, which
 differs from the number of boxes, and the RDB of a hierarchical run says
-that Magic's check from the top cell alone can report fewer errors.
+that Magic's check from the top cell alone can report fewer errors. Since
+0.6.3 the message's first line (`drcjob.headline`) starts with that count
+in the top cell, the number that a course script's `drc list count
+total` prints, and then gives the error markers per rule: "Magic counts
+32 DRC errors in datapath. The report has 62 error markers, 3 rules:
+LU.2 31, LU.3 30, nwell.4 1." on a placement of standard cells without a
+tap cell, which 0.6.2 began with the 62 [run]. An area check gives the
+markers alone. The summary calls the export's items notes, since they
+are information in DRC: a clean check of a cell with npc drawn said
+"The export has 1 finding" [run, 0.6.2].
 
 **Why hierarchical is the default.** Magic's GDS reader decides device
 types inside each cell from that cell's own shapes. With an inverter's
@@ -438,7 +486,7 @@ with the extraction job, which keeps the hierarchy. On every PDK, the
 backend test asserts that the top cell's own listing equals the measured
 top-only result, and that the rules of hierarchical mode's errors are
 exactly the rules of that result [run]. Both modes on one file, trimmed,
-on 0.6.2's code [run]:
+on 0.6.3's code [run]:
 
 ```
 $ python3 -m klayout_magic_pcells drc out/cases/sky130A/hier/inv_base_all_h.gds --tsv -
@@ -446,13 +494,13 @@ cell	rule	why	l	b	r	t
 inv_base_all_h	nwell.2a	N-well spacing < 1.27um (nwell.2a)	1.17	3.37	1.68	3.4
 ...
 inv_base_all_h	poly.4	poly spacing to Diffusion < 0.075um (poly.4)	1.5	3.5	1.575	3.575
-Magic DRC (drc(full), hierarchical) of inv_base_all_h on sky130A: 36 error boxes, 7 rules, in 1 cell. inv_base_all_h: 36 error boxes; Magic's drc list count total 5 in the top cell, 7 over the 2 cells checked; of the 47 boxes the subcells' own checks list, 7 are in the top cell's check (reported there), 0 only in the flattened layout's check, 40 only when the subcell is checked on its own (information, not counted). The export has 9 findings (category Export).
+Magic DRC (drc(full), hierarchical) of inv_base_all_h on sky130A: 36 error boxes, 7 rules, in 1 cell. inv_base_all_h: 36 error boxes; Magic's drc list count total 5 in the top cell, 7 over the 2 cells checked; of the 47 boxes the subcells' own checks list, 7 are in the top cell's check (reported there), 0 only in the flattened layout's check, 40 only when the subcell is checked on its own (information, not counted). The report has 9 notes about the export (category Export, information).
 $ python3 -m klayout_magic_pcells drc out/cases/sky130A/hier/inv_base_all_h.gds --mode flat --tsv -
 cell	rule	why	l	b	r	t
-Magic DRC (drc(full), flat) of inv_base_all_h on sky130A: no errors. inv_base_all_h: 0 error boxes; Magic's drc list count total 0 in the top cell. The export has 1 finding (category Export).
+Magic DRC (drc(full), flat) of inv_base_all_h on sky130A: no errors. inv_base_all_h: 0 error boxes; Magic's drc list count total 0 in the top cell. The report has 1 note about the export (category Export, information).
 ```
 
-The first exits 1, the second 0; eight of the nine export findings are
+The first exits 1, the second 0; eight of the nine notes about the export are
 the cross-cell check's.
 
 **Subcell boxes.** A subcell checked on its own can list boxes that its
@@ -581,14 +629,14 @@ other file there, even an empty one, makes it exit 2 with a message that
 suggests `-o`; with `-o`, it writes where it is told. `--rdb OUT.lyrdb`
 saves the report, also when the job fails [src]. On sky130A, with a
 second run (not shown) that replaced the file the first had written
-[run]:
+[run, 0.6.3]:
 
 ```
 $ python3 -m klayout_magic_pcells extract out/cases/sky130A/inverters/inv.gds --rdb out/d2/inv_extract.lyrdb
-extract: Magic extracted inv (netlist only, sky130A) into /repo/out/cases/sky130A/inverters/inv.magic.spice. The report has 1 item about the export.
+extract: Magic extracted inv (netlist only, sky130A) into /repo/out/cases/sky130A/inverters/inv.magic.spice. The report has 1 note about the export (category Export, information).
 ...
 $ head -2 out/cases/sky130A/inverters/inv.magic.spice
-* Written by klayout_magic_pcells 0.6.0: Magic's netlist of inv (netlist only, sky130A) from /repo/out/cases/sky130A/inverters/inv.gds
+* Written by klayout_magic_pcells 0.6.3: Magic's netlist of inv (netlist only, sky130A) from /repo/out/cases/sky130A/inverters/inv.gds
 * NGSPICE file created from inv.ext - technology: sky130A
 $ cp out/cases/sky130A/inverters/inv.spice out/cases/sky130A/inverters/inv.magic.spice
 $ python3 -m klayout_magic_pcells extract out/cases/sky130A/inverters/inv.gds
@@ -738,16 +786,26 @@ tech file's comment plane names no net: the builder lists it under
 - P4: a pin box with no text, looking at texts on the pin's own layer
   number and on the text layer that a `both` row pairs with the pin
   (sky130A's pwell.label 64/59 for pwell.pin 122/16, where the standard
-  cells put VNB).
+  cells put VNB). Since 0.6.3 a pin box whose conductor (the pin's
+  drawing layers and pin boxes in that cell, merged) touches a pin box of
+  the same layer with a text is no finding: `sky130_fd_sc_hd__and2_0` has
+  two li1.pin boxes for B and the text over one, and gave a P4 for the
+  other in 0.6.2 [run].
 - P5: a pin box with no drawing under it, which Magic turns into
   conductor and KLayout does not.
 - P6: a text over no shape of its layer, looking down the hierarchy.
 - P7: texts inside device PCells on a layer that KLayout's flat LVS joins
-  by name, with the advice `doports 0`.
+  by name, with the advice `doports 0`. Since 0.6.3 these items are
+  information and don't set the status: the sky130A inverter from the
+  PCells, which netgen matches, gave 8 of them and exit 1 on 0.6.2, and
+  exits 0 on 0.6.3 [run].
 - P8, which needs `--magic`: a top-level pin text missing from the ports
   of Magic's `.subckt` line.
 
-P1 to P7 start no job. With `--magic`, a cell that Magic reads nothing in
+The message's first line (`portcheck.headline`) names the cells that
+hold the findings, since 0.6.3: "In datapath: 1 pin box with no text."
+was about an item filed under and2_0 [run, 0.6.2]. P1 to P7 start no
+job. With `--magic`, a cell that Magic reads nothing in
 gives P1 to P7 and the reads-nothing item, and the summary says that P8
 did not run [src]. On sky130A `inv`, the check with `--magic` finds
 nothing, and Magic's ports are A, Y, VPWR and VGND; `inv_pin_only_li`
@@ -841,19 +899,21 @@ was typed from the tech file, and each row cites its lines.
 
 `scripts/test.sh` runs the unit tests and the gap generator's tests, then
 `tests/backend` once per PDK [src]. On 0.6.1's code the 380 unit tests
-and the gap generator's 18 tests passed, and on 0.6.2's code 401 unit
-tests and the same 18 [run]. Two of the unit tests
+and the gap generator's 18 tests passed, on 0.6.2's code 401 unit tests
+and the same 18, and on 0.6.3's code 409 and 18 [run]. Two of the unit
+tests
 were skipped: they read a folder of saved netgen reports kept outside
 the repository, and run only when `KMP_NETGEN_EVIDENCE` names it. In
 0.6.1's run the backend tests ran 95 tests on sky130A in 144 s, 3 of them
-skipped, and in 0.6.2's run the same 95 in 150 s [run]. The backend files for the 0.6 checks build their cases
+skipped, in 0.6.2's run the same 95 in 150 s, and in 0.6.3's run 96 in
+146 s [run]. The backend files for the 0.6 checks build their cases
 with the case suite, in a temporary folder:
 
 | File | Tests | What they check |
 |---|---|---|
 | `test_jobs_backend.py` | 7 | the scale; the load checks on the names list; timeout and cancel leave no Magic; two jobs on one key at once; a Tcl error ends the job |
 | `test_drc_backend.py` | 17 | one-change cases; the hierarchy cases and `mdrc.tcl` on their export; the long well by area; the names; the error marker; 15-cell batches and an empty child; poll and cancel; RDB boxes against the TSV; the subcell classes; cells Magic reads nothing in; layer hints |
-| `test_lvs_backend.py` | 15 | the read-back list; the inverter and its broken variants; two LVS runs on one extraction; port boxes against texts; `--caps`; the cache; the extract command |
+| `test_lvs_backend.py` | 16 | the read-back list; the inverter and its broken variants; two LVS runs on one extraction; port boxes against texts; `--caps`; the cache; the extract command; the PCell inverter saved as KLayout's GUI saves it |
 | `test_layers_backend.py` | 14 | the negative controls; F1 to F5 cases; the hierarchy cases; the RDB, cache and tmp-* directories; cells Magic reads nothing in; port variants; P8; layers read as another type |
 
 `python3 tests/cases/build.py --pdk P --out DIR [--set S]` draws the case
@@ -1156,4 +1216,8 @@ All UNVERIFIED:
   0.6.2 the menu also ran under XFCE on a 1280 × 800 screen, driven with
   xdotool; that run tried the LVS dialog's Browse... button. How long
   `prepare()` blocks KLayout's main thread while it exports a large
-  layout.
+  layout. Why KLayout's GUI names the PCell variants of a layout in a view
+  by the PCell alone (2.6), and whether that holds for other KLayout
+  versions. The course's build saw the LVS dialog's buttons move by
+  about 15 px between openings; six openings under XFCE with 0.6.2's code
+  gave the same place each time, so the cause was not found.

@@ -115,8 +115,33 @@ class Conventions(unittest.TestCase):
         ly, top = layout([(f["draw"], BOX)], [(f["text"], "A", 0.3, 0.3), (f["text"], "Y", 0.6, 0.6)])
         found = portcheck.check_layout(ly, top, pdkdata.load("sky130A"))
         self.assertEqual(portcheck.headline(found, "TOP"),
-                         "In TOP: 2 texts that name nets in Magic but make no pins (A, Y).")
+                         "In TOP: 2 texts that name nets in Magic but make no ports (A, Y).")
         self.assertEqual(portcheck.headline([], "TOP"), "No port findings in TOP.")
+
+    def test_headline_names_the_cells_that_hold_the_items(self):
+        """An item filed under a subcell is in that cell, not the top cell."""
+        f = FORMS["sky130A"]
+        ly, top = layout([], [], sub=("and2_0", [(f["draw"], BOX), (f["pin"], PINBOX)], [], (0.0, 0.0)))
+        found = portcheck.check_layout(ly, top, pdkdata.load("sky130A"))
+        self.assertEqual([(x["check"], x["cell"]) for x in found], [("P4", "and2_0")])
+        self.assertEqual(portcheck.headline(found, "TOP"), "In and2_0: 1 pin box with no text.")
+        found.append(dict(found[0], cell="TOP"))
+        self.assertEqual(portcheck.headline(found, "TOP"), "In TOP and and2_0: 2 pin boxes with no text.")
+
+    def test_p4_a_second_pin_box_of_a_named_pin(self):
+        """sky130_fd_sc_hd__and2_0's B: two li1.pin boxes on one li shape, the
+        text over one of them. The other is part of the named pin."""
+        f = FORMS["sky130A"]
+        li = (1.065, 1.105, 1.235, 1.615)
+        pins = [(f["pin"], (1.065, 1.445, 1.235, 1.615)), (f["pin"], (1.065, 1.105, 1.235, 1.275))]
+        ly, top = layout([(f["draw"], li)] + pins, [(f["text"], "B", 1.15, 1.53)])
+        self.assertEqual(checks("sky130A", ly, top), [])
+        # On a piece of li of its own, the box without a text is a P4.
+        ly, top = layout([(f["draw"], (1.065, 1.445, 1.235, 1.615)), (f["draw"], (1.065, 1.105, 1.235, 1.275))]
+                         + pins, [(f["text"], "B", 1.15, 1.53)])
+        found = portcheck.check_layout(ly, top, pdkdata.load("sky130A"))
+        self.assertEqual([x["check"] for x in found], ["P4"])
+        self.assertIn("(1.065, 1.105)", found[0]["text"])
 
     def test_p5_a_pin_box_without_drawing(self):
         for pdk in ("sky130A", "ihp-sg13g2", "ihp-sg13cmos5l"):
@@ -158,6 +183,24 @@ class Conventions(unittest.TestCase):
         found = portcheck.check_layout(ly, top, pdkdata.load("ihp-sg13g2"))
         self.assertEqual([x["check"] for x in found], ["P7"])
         self.assertIn("doports 0", found[0]["text"])
+
+    def test_p7_is_information(self):
+        """Texts inside device cells matter only to KLayout's flat LVS: the
+        items are information, and alone they leave the status at 0."""
+        import types
+        f = FORMS["sky130A"]
+        ly, top = layout([(f["draw"], BOX)], [],
+                         sub=("sky130_fd_pr__nfet_01v8__kmp_0123abcd", [(f["draw"], BOX)],
+                              [(f["text"], "D", 0.3, 0.3), (f["text"], "S", 0.6, 0.6)], (0, 0)))
+        cfg = types.SimpleNamespace(pdk="sky130A", cache_dir=tempfile.mkdtemp(prefix="kmp-p7-"))
+        o = portcheck.prepare(ly, top, cfg, pdkdata.load("sky130A"), {}).start().wait()
+        self.assertEqual(o.status, 0, o.summary)
+        self.assertIn("P7 2 (information)", o.summary)
+        self.assertEqual(o.headline, "No port findings in TOP. The 2 texts inside device cells are information: "
+                                     "only KLayout's flat LVS joins nets by them.")
+        items = list(o.rdb.db.each_item())
+        self.assertEqual(len(items), 2)
+        self.assertTrue(all("waived" in it.tags_str for it in items))
 
     def test_p8_a_pin_missing_from_magics_ports(self):
         f = FORMS["sky130A"]

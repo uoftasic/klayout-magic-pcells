@@ -17,6 +17,12 @@ and turns PCell variants into plain cells) and changed there:
   ``name_map`` keeps the names: Magic renames ``a b`` and ``café`` itself,
   refuses ``a.b``, loads an empty ``y`` for ``x/y`` and keeps the previous
   cell for ``br[0]``;
+- a variant of one of the plugin's PCells is written as
+  ``<device>__kmp_<8 hex>`` whatever its name in KLayout (``variants``):
+  KLayout's GUI names the variants of a layout it loads into a view, or
+  places with the Instance tool, by the PCell's name alone, and a cell
+  named like the device's model is a subcircuit of that name in Magic's
+  netlist, which netgen can't use (design-0.6.md 2.6);
 - with ``flat=True`` the top cell is flattened: "Magic's verdict on the
   flattened mask".
 
@@ -38,13 +44,17 @@ of ``name_map``, which are the names in the written file.
 """
 
 import hashlib
+import json
 import os
 import re
 
 from ._kl import db
-from .pcell import PLACEHOLDER_LAYER
+from .pcell import CREATED_PARAM, PLACEHOLDER_LAYER
 
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_$]+$")
+# The name a script gives a variant of the plugin's PCells (cell_name_impl),
+# with the "$1" KLayout adds to a second cell of one name.
+VARIANT_NAME = re.compile(r"^(.+)__kmp_[0-9a-f]{8}(?:\$\d+)?$")
 IMPLANT_ROLES = ("implant", "well", "marker")
 # The shapes whose Magic type an implant, well or marker decides. A cut is not
 # one of them: a diffusion or poly contact takes its type from the diffusion
@@ -82,6 +92,7 @@ class ExportResult:
         self.top = None             # the top cell's name in the written file
         self.klayout_top = None     # and in KLayout
         self.name_map = {}          # KLayout name -> name in the file
+        self.variants = {}          # the plugin's PCell variants given a __kmp_ name: KLayout name -> name in the file
         self.sha256 = None
         self.flat = False
         self.dbu = None
@@ -98,8 +109,9 @@ class ExportResult:
 
     @property
     def renamed(self):
-        """{KLayout name: name in the file} for the cells that were renamed."""
-        return {k: v for k, v in self.name_map.items() if k != v}
+        """{KLayout name: name in the file} for the cells renamed because
+        Magic can't load their names (not the PCell variants)."""
+        return {k: v for k, v in self.name_map.items() if k != v and k not in self.variants}
 
     def klayout_name(self, file_name):
         """The KLayout name of a cell named ``file_name`` in the file."""
@@ -159,6 +171,59 @@ def resolve_cells(layout, names):
             "s" if len(missing) > 1 else "", ", ".join(missing), "are" if len(missing) > 1 else "is"),
             missing=missing)
     return out
+
+
+def plugin_variant(cell):
+    """(device, parameters) for a variant of one of the plugin's PCells, else
+    None. A variant is a library proxy, or a cold proxy when the library isn't
+    registered (the command line), and has the plugin's hidden parameter
+    ``kmp_created``, whatever the cell's name."""
+    try:
+        if not cell.is_proxy():
+            return None
+        params = cell.pcell_parameters_by_name() or {}
+    except Exception:
+        return None
+    if CREATED_PARAM not in params:
+        return None
+    device = ""
+    try:
+        device = cell.pcell_name() or ""
+    except Exception:
+        pass
+    if not device:
+        m = VARIANT_NAME.match(cell.name)
+        device = m.group(1) if m else cell.basic_name()
+    return device, params
+
+
+def variant_device(cell):
+    """The device of a cell that is a variant of the plugin's PCells, by its
+    PCell or by its ``__kmp_`` name (a file saved without the context), else
+    None."""
+    v = plugin_variant(cell)
+    if v is not None:
+        return v[0]
+    m = VARIANT_NAME.match(cell.name)
+    return m.group(1) if m else None
+
+
+def variant_file_name(cell, taken=()):
+    """The new name a variant of the plugin's PCells gets in the file Magic
+    reads: ``<device>__kmp_<hash of its parameters>``, not in ``taken``.
+    None for a cell that isn't such a variant, or that already has a
+    ``<device>__kmp_<8 hex>`` name, which it keeps."""
+    v = plugin_variant(cell)
+    if v is None or VARIANT_NAME.match(cell.name):
+        return None
+    device, params = v
+    text = json.dumps({k: params[k] for k in sorted(params)}, sort_keys=True, default=str)
+    name = "%s__kmp_%s" % (device, hashlib.sha256(text.encode("utf-8")).hexdigest()[:8])
+    base, i = name, 1
+    while name in taken:
+        name = "%s$%d" % (base, i)
+        i += 1
+    return name
 
 
 def safe_name(name, taken):
@@ -430,12 +495,31 @@ def _drawn(layout, top, layers):
     return sorted(out, key=lambda x: (x[0], x[1]))
 
 
-def _rename(layout, top):
+def _variant_names(layout, top):
+    """{KLayout name: name in the file} for the plugin's PCell variants in
+    ``top``'s tree that lack a ``__kmp_`` name."""
     cells = _tree(layout, top)
     taken = {c.name for c in cells}
+    out = {}
+    for c in sorted(cells, key=lambda c: c.name):
+        new = variant_file_name(c, taken)
+        if new:
+            out[c.name] = new
+            taken.add(new)
+    return out
+
+
+def _rename(layout, top, variants=None):
+    variants = variants or {}
+    cells = _tree(layout, top)
+    taken = {c.name for c in cells} | set(variants.values())
     name_map = {}
     for c in sorted(cells, key=lambda c: c.name):
         old = c.name
+        if old in variants:
+            layout.rename_cell(c.cell_index(), variants[old])
+            name_map[old] = variants[old]
+            continue
         if SAFE_NAME.match(old):
             name_map[old] = old
             continue
@@ -456,6 +540,7 @@ def export_cell(layout, cell, path, data, flat=False):
         cell = layout.cell(name)
         if cell is None:
             raise ExportError("cell %s is not in the layout" % name, missing=[name])
+    variants = _variant_names(layout, cell)
     copy, top = _copy_tree(layout, cell)
     res = ExportResult()
     res.flat = bool(flat)
@@ -487,7 +572,8 @@ def export_cell(layout, cell, path, data, flat=False):
             res.cross_cell, res.cross_cell_covered = _cross_cell(copy, top, layers)
     if flat:
         top.flatten(True)
-    res.name_map = _rename(copy, top)
+    res.name_map = _rename(copy, top, variants)
+    res.variants = {k: v for k, v in variants.items() if res.name_map.get(k) == v}
     res.top = res.name_map[cell.name]
     copy.write(path, save_options(top))
     res.path = path

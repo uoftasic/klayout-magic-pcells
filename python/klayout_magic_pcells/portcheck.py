@@ -10,12 +10,16 @@ and the forms both accept (``both``).
 - P1: a text that neither Magic nor the KLayout LVS reads;
 - P2: a text that names a net in Magic but makes no port (netgen fails pin matching);
 - P3: a Magic port that the KLayout LVS can't name;
-- P4: a pin box with no text over it;
+- P4: a pin box with no text over it, unless the conductor it sits on
+  (its drawing layer and pin boxes, merged) touches a pin box of that layer
+  that has one: a second pin box of a named pin, such as the B pin of
+  ``sky130_fd_sc_hd__and2_0``;
 - P5: a pin box with no drawing under it, or reaching past it: Magic turns
   it into conductor, KLayout doesn't;
 - P6: a text over no shape of its conductor layer, looking down the hierarchy;
 - P7: texts inside device PCells on a layer KLayout's LVS reads: its flat
-  LVS joins every net with that name;
+  LVS joins every net with that name. Information, not counted in the
+  exit status: only KLayout's LVS in its flat mode joins nets by them;
 - P8 (--magic): a top-level text in a pin form that is missing from the
   ports of Magic's ``.subckt`` line (an extraction of the top cell as Magic
   reads it).
@@ -53,7 +57,8 @@ DESC = {
     "P3": "Magic makes this text a port, but the PDK's KLayout LVS deck reads net names from other layers.",
     "P5": "Magic reads a pin box as conductor; KLayout's decks don't, so the two tools see different metal.",
     "P7": "KLayout's flat LVS joins every net that carries the same text; texts inside device cells join "
-          "the devices' terminals with each other and with top-level nets of that name.",
+          "the devices' terminals with each other and with top-level nets of that name. Information, not "
+          "counted in the exit status: only KLayout's LVS in its flat mode joins nets by these texts.",
 }
 KMP_VARIANT = re.compile(r"__kmp_[0-9a-f]{8}$")
 
@@ -118,9 +123,11 @@ class Convention:
 
 def device_cell(cell):
     """A cell that is a device PCell: a variant of the plugin's PCells, or a
-    PCell or library cell of KLayout."""
+    PCell or library cell of KLayout, also one whose library isn't
+    registered (a cold proxy: a file saved from KLayout's GUI and read on
+    the command line)."""
     try:
-        if cell.is_pcell_variant() or cell.is_library_cell():
+        if cell.is_pcell_variant() or cell.is_library_cell() or cell.is_proxy():
             return True
     except Exception:
         pass
@@ -157,6 +164,18 @@ def _rec_texts(layout, cell, lds, box):
             out.append(it.shape().text.transformed(it.trans()))
             it.next()
     return out
+
+
+def _named_through(conductor, poly, polys, named):
+    """True when the conductor shape under the pin box ``poly`` (``conductor``:
+    the pin layer's drawing layers and pin boxes, merged) also touches a pin
+    box of ``polys`` that has a text (``named``)."""
+    if not any(named):
+        return False
+    under = conductor.interacting(db.Region(poly))
+    if under.is_empty():
+        return False
+    return any(has and not under.interacting(db.Region(p)).is_empty() for p, has in zip(polys, named))
 
 
 def check_layout(layout, top, data, magic_ports=None):
@@ -230,12 +249,18 @@ def check_layout(layout, top, data, magic_ports=None):
             draw = conv.pin_draw.get(ld, [])
             text_lds = sorted(set([x for x in text_layers if x[0] == ld[0]] + [ld])
                               | conv.texts_for_pin.get(ld, set()))
-            for poly in db.Region(cell.shapes(li)).merged().each():
+            polys = list(db.Region(cell.shapes(li)).merged().each())
+            named = [bool(_rec_texts(layout, cell, text_lds, p.bbox())) for p in polys]
+            conductor = None
+            for poly, has_text in zip(polys, named):
                 b = poly.bbox()
                 dbox = db.DBox(b.left * dbu, b.bottom * dbu, b.right * dbu, b.top * dbu)
-                if not _rec_texts(layout, cell, text_lds, b):
-                    add("P4", cell, ld, dbox, "pin box on %s at %s has no text over it: neither tool names it."
-                        % (conv.name(ld), layercheck._boxtext(dbox)))
+                if not has_text:
+                    if conductor is None:
+                        conductor = _rec_region(layout, cell, list(draw) + [ld])
+                    if not _named_through(conductor, poly, polys, named):
+                        add("P4", cell, ld, dbox, "pin box on %s at %s has no text over it: neither tool names "
+                            "it." % (conv.name(ld), layercheck._boxtext(dbox)))
                 if draw:
                     left = db.Region(poly) - _rec_region(layout, cell, draw, b)
                     if not left.is_empty():
@@ -276,8 +301,8 @@ class Outcome(layercheck.Outcome):
 
 _PLAIN = {
     "P1": ("text that neither Magic nor KLayout's LVS reads", "texts that neither Magic nor KLayout's LVS reads"),
-    "P2": ("text that names a net in Magic but makes no pin", "texts that name nets in Magic but make no pins"),
-    "P3": ("pin in Magic that KLayout's LVS can't name", "pins in Magic that KLayout's LVS can't name"),
+    "P2": ("text that names a net in Magic but makes no port", "texts that name nets in Magic but make no ports"),
+    "P3": ("port in Magic that KLayout's LVS can't name", "ports in Magic that KLayout's LVS can't name"),
     "P4": ("pin box with no text", "pin boxes with no text"),
     "P5": ("pin box with no drawing under it", "pin boxes with no drawing under them"),
     "P6": ("text over no shape of its layer", "texts over no shape of their layer"),
@@ -286,12 +311,24 @@ _PLAIN = {
 }
 
 
+INFO = ("P7",)   # information: not counted in the exit status
+
+
+def _cells_text(cells):
+    if len(cells) <= 3:
+        return cells[0] if len(cells) == 1 else "%s and %s" % (", ".join(cells[:-1]), cells[-1])
+    return "%s and %d other cells" % (", ".join(cells[:2]), len(cells) - 2)
+
+
 def headline(found, cell):
     """The first line of the GUI's result message, in plain words: the
-    findings per check, with the texts they are about, or that there are
-    none."""
+    findings per check, with the texts they are about, in the cells that
+    hold them, or that there are none; then the information items (P7)."""
     parts = []
+    cells = []
     for k in sorted(CATS):
+        if k in INFO:
+            continue
         items = [f for f in found if f["check"] == k]
         if not items:
             continue
@@ -301,12 +338,21 @@ def headline(found, cell):
         for f in items:
             if f.get("name") and f["name"] not in names:
                 names.append(f["name"])
-        if names and k != "P7":
+            if f["cell"] not in cells:
+                cells.append(f["cell"])
+        if names:
             part += " (%s%s)" % (", ".join(names[:6]), ", ..." if len(names) > 6 else "")
         parts.append(part)
+    info = [f for f in found if f["check"] in INFO]
+    note = ""
+    if info:
+        one, many = _PLAIN["P7"]
+        note = (" The %d %s %s information: only KLayout's flat LVS joins nets by them."
+                % (len(info), one if len(info) == 1 else many, "is" if len(info) == 1 else "are"))
     if not parts:
-        return "No port findings in %s." % cell
-    return "In %s: %s." % (cell, "; ".join(parts))
+        return "No port findings in %s.%s" % (cell, note)
+    cells = [c for c in cells if c == cell] + sorted(c for c in cells if c != cell)
+    return "In %s: %s.%s" % (_cells_text(cells), "; ".join(parts), note)
 
 
 class Task(layercheck.RwTask):
@@ -368,12 +414,14 @@ class Task(layercheck.RwTask):
         counts = {}
         for f in found:
             counts[f["check"]] = counts.get(f["check"], 0) + 1
-        summary = "ports on %s, cell %s: %s" % (self.data.pdk, self.cell.name,
-                                                ", ".join("%s %d" % (k, counts.get(k, 0)) for k in sorted(CATS)
-                                                          if k != "P8" or ports is not None))
+        summary = "ports on %s, cell %s: %s" % (
+            self.data.pdk, self.cell.name,
+            ", ".join("%s %d%s" % (k, counts.get(k, 0), " (information)" if k in INFO and counts.get(k) else "")
+                      for k in sorted(CATS) if k != "P8" or ports is not None))
         if ports is not None:
             summary += "; Magic's ports: %s" % (" ".join(ports) or "none")
-        out = Outcome(1 if found else 0, rdb, summary, files or {}, {"ports": found},
+        counted = [f for f in found if f["check"] not in INFO]
+        out = Outcome(1 if counted else 0, rdb, summary, files or {}, {"ports": found},
                       headline=headline(found, self.cell.name))
         out.magic_ports = ports
         if not self.magic:
@@ -384,7 +432,7 @@ class Task(layercheck.RwTask):
 def fill_rdb(rdb, found, layout=None):
     for f in found:
         cat = rdb.category((CATS[f["check"]],), DESC.get(f["check"], ""))
-        rdb.item(cat, f["cell"], f["box"], f["text"])
+        rdb.item(cat, f["cell"], f["box"], f["text"], info=f["check"] in INFO)
     # Items in subcells need their placements for the browser to show them in
     # the top cell (design-0.6.md 2.7).
     if layout is not None and hasattr(markers, "add_parent_references"):

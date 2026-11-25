@@ -342,6 +342,7 @@ def remove_menu():
 # -- messages and windows -----------------------------------------------------------
 
 _windows = []   # message boxes, text windows and old progress dialogs we made
+_timers = []    # single-shot timers of later()
 _rdbs = []      # report databases handed to views (kept, so Python never frees one)
 
 
@@ -360,6 +361,31 @@ def _prune():
         except Exception:
             pass
     _windows[:] = keep
+
+
+def later(fn, ms=0):
+    """Run ``fn()`` from the event loop after ``ms`` milliseconds (at once
+    without Qt)."""
+    pya = _pya()
+    if not has_qt():
+        fn()
+        return
+    t = pya.QTimer(main_window())
+    t.singleShot = True
+    t.interval = ms
+
+    def run():
+        try:
+            _timers.remove(t)
+        except ValueError:
+            pass
+        try:
+            fn()
+        except Exception as e:
+            _log_error("klayout_magic_pcells: %s" % e)
+    t.timeout = run
+    _timers.append(t)
+    t.start()
 
 
 def message(kind, title, text, details=None, on_close=None):
@@ -430,6 +456,141 @@ def raise_browser():
             pass
 
 
+def _children(root, cls):
+    """``root``'s descendants of Qt class ``cls``."""
+    out = []
+
+    def rec(o):
+        try:
+            kids = o.children()
+        except Exception:
+            return
+        for c in kids:
+            if type(c).__name__.replace("_Native", "") == cls:
+                out.append(c)
+            rec(c)
+    rec(root)
+    return out
+
+
+DIRECTORY_WIDTH = 300   # px for the browser's Directory pane, at most
+
+
+def fit_splitter(sizes, keep=DIRECTORY_WIDTH):
+    """The sizes of the browser's Directory | Markers splitter: the
+    Directory pane no wider than ``keep``, the rest to the markers and the
+    Info pane."""
+    if len(sizes) != 2:
+        return list(sizes)
+    left = min(sizes[0], keep)
+    return [left, sizes[0] + sizes[1] - left]
+
+
+def _browser_splitter(w):
+    """The browser's horizontal splitter between Directory and Markers."""
+    pya = _pya()
+    for sp in _children(w, "QSplitter"):
+        try:
+            if _value(sp.orientation) != pya.Qt.Horizontal:
+                continue
+            if any(_value(t.objectName) == "directory_tree" for t in _children(sp, "QTreeView")):
+                return sp
+        except Exception:
+            continue
+    return None
+
+
+def _menu_bottom():
+    """(left, right, bottom) of the main window's menu bar on the screen, or
+    None."""
+    pya = _pya()
+    mw = main_window()
+    if mw is None:
+        return None
+    bars = [b for b in _children(mw, "QMenuBar") if b.isVisible()]
+    if not bars:
+        return None
+    mb = bars[0]
+    try:
+        tl = mb.mapToGlobal(pya.QPoint(0, 0))
+        return (_value(tl.x), _value(tl.x) + _value(mb.width), _value(tl.y) + _value(mb.height))
+    except Exception:
+        return None
+
+
+BROWSER_SIZE = (560, 600)   # the browser's size when it comes back from maximised
+
+
+def place_browser():
+    """Set the Marker Database Browser up for the result just shown: not
+    maximised (KLayout keeps that state for the session), below the main
+    window's menu bar, so the Magic menu stays in reach while the browser
+    is in front of the main window, and with a Directory pane no wider
+    than DIRECTORY_WIDTH, so that the window's width goes to the Info pane
+    where a finding's lines are (KLayout gives it to the Directory pane)."""
+    pya = _pya()
+    for w in browser_windows():
+        sp = _browser_splitter(w)
+        if sp is not None:
+            try:
+                sp.setStretchFactor(0, 0)
+                sp.setStretchFactor(1, 1)
+                sp.setSizes(fit_splitter(list(sp.sizes())))
+            except Exception:
+                pass
+        try:
+            maximised = w.isMaximized()
+        except Exception:
+            maximised = False
+        if maximised:
+            w.showNormal()
+            # The window manager restores the window after this returns.
+            later(lambda w=w: _unmaximised(w, pya), 200)
+        else:
+            _below_menu(w, pya)
+
+
+def _unmaximised(w, pya):
+    """A browser that KLayout made maximised comes back at the size of the
+    screen: give it BROWSER_SIZE, centred, below the menu bar."""
+    avail = _available_rect()
+    try:
+        width = _value(_value(w.geometry).width)
+    except Exception:
+        return
+    if avail is not None and width >= avail[2] - 50:
+        bw, bh = fit_size(BROWSER_SIZE, (avail[2], avail[3]))
+        menu = _menu_bottom()
+        w.resize(bw, bh)
+        w.move(avail[0] + (avail[2] - bw) // 2, (menu[2] + 2) if menu else avail[1])
+    else:
+        _below_menu(w, pya)
+
+
+def _below_menu(w, pya):
+    menu = _menu_bottom()
+    if menu is None:
+        return
+    left, right, bottom = menu
+    try:
+        fg = _value(w.frameGeometry)
+        top, x, fw = _value(fg.top), _value(fg.left), _value(fg.width)
+    except Exception:
+        return
+    if top >= bottom or x >= right or x + fw <= left:
+        return
+    try:
+        w.move(x, bottom + 2)
+        avail = _available_rect()
+        if avail is not None:
+            room = avail[1] + avail[3] - (bottom + 2) - (_value(fg.height) - _value(_value(w.geometry).height))
+            h = _value(_value(w.geometry).height)
+            if room > 200 and h > room:
+                w.resize(_value(_value(w.geometry).width), room)
+    except Exception:
+        pass
+
+
 def fit_size(want, available, margin=(40, 70)):
     """(width, height): ``want`` made small enough for the screen area
     ``available`` (width, height), less ``margin`` for the window's frame
@@ -446,18 +607,25 @@ def _value(x):
     return x() if callable(x) else x
 
 
-def _available():
-    """(width, height) of the screen area windows may use (without panels),
-    or None."""
+def _available_rect():
+    """(left, top, width, height) of the screen area windows may use
+    (without panels), or None."""
     pya = _pya()
     for get in (lambda: _value(_value(pya.QGuiApplication.primaryScreen).availableGeometry),
                 lambda: _value(pya.QApplication.desktop).availableGeometry(main_window())):
         try:
             g = get()
-            return (int(_value(g.width)), int(_value(g.height)))
+            return (int(_value(g.left)), int(_value(g.top)), int(_value(g.width)), int(_value(g.height)))
         except Exception:
             continue
     return None
+
+
+def _available():
+    """(width, height) of the screen area windows may use (without panels),
+    or None."""
+    r = _available_rect()
+    return (r[2], r[3]) if r else None
 
 
 def _resizable(dlg, size):
@@ -480,9 +648,11 @@ def ask_yes_no(title, text):
     return res == pya.MessageBox.Yes
 
 
-def show_text(title, text, name="kmp_text", markdown=False, size=(900, 600), at_end=False):
+def show_text(title, text, name="kmp_text", markdown=False, size=(900, 600), at_end=False, on_close=None):
     """A non-modal window with ``text`` (plain, or Markdown when asked),
-    sized to fit the screen; ``at_end`` scrolls to the last line."""
+    sized to fit the screen and kept below the main window's menu bar;
+    ``at_end`` scrolls to the last line; ``on_close()`` runs when the
+    window closes."""
     pya = _pya()
     if not has_qt():
         return None
@@ -510,10 +680,13 @@ def show_text(title, text, name="kmp_text", markdown=False, size=(900, 600), at_
     bb = pya.QDialogButtonBox(dlg)
     close = bb.addButton(pya.QDialogButtonBox.Close)
     close.objectName = "close"
-    bb.rejected = lambda: dlg.hide()
+    bb.rejected = lambda: dlg.reject()
+    if on_close is not None:
+        dlg.finished = lambda *_: on_close()
     lay.addWidget(bb)
     dlg.windowModality = pya.Qt.NonModal
     dlg.show()
+    later(lambda: _below_menu(dlg, pya), 300)
     if at_end:
         try:
             view.moveCursor(pya.QTextCursor.End)
@@ -685,11 +858,24 @@ def ask_lvs_options(cell, current, pdk):
             path.text = f
             fill()
 
-    browse.clicked = pick
     path.editingFinished = fill
     path.textChanged = fill
     fill()
-    form.addRow(_buttons(dlg))
+    bb = _buttons(dlg)
+    form.addRow(bb)
+    ok = [b for b in bb.buttons() if _value(b.objectName) == "ok"]
+    # Return presses OK, also right after Browse...: the button that had the
+    # focus would otherwise take Return and open the file dialog again.
+    browse.setAutoDefault(False)
+    if ok:
+        ok[0].setDefault(True)
+
+    def picked(*_):
+        pick()
+        if ok:
+            ok[0].setFocus()
+    browse.clicked = picked
+    center_on_main_window(dlg)
     try:
         while True:
             if dlg.exec_() != 1:
@@ -709,6 +895,22 @@ def ask_lvs_options(cell, current, pdk):
             return {"schematic": os.path.abspath(path.text), "subckt": sub.currentText}
     finally:
         dlg._destroy()
+
+
+def center_on_main_window(dlg):
+    """Place a dialog over the middle of the main window, where it opens
+    each time, rather than where the window manager would put it."""
+    mw = main_window()
+    if mw is None:
+        return
+    try:
+        fg = _value(mw.frameGeometry)
+        size = _value(dlg.sizeHint)
+        w = max(_value(dlg.width), _value(size.width))
+        h = max(_value(dlg.height), _value(size.height))
+        dlg.move(_value(fg.left) + (_value(fg.width) - w) // 2, _value(fg.top) + (_value(fg.height) - h) // 2)
+    except Exception:
+        pass
 
 
 def plugin_netlist(path):
@@ -1139,6 +1341,8 @@ def _show_outcome(ctx, run, rdb_index, after):
         else:
             idx = view.add_rdb(db)
         view.show_rdb(idx, ctx.cv_index)
+        # The browser is on screen only once Qt has run its events.
+        later(place_browser, 300)
     # after() first: extract's names the file written in the summary.
     extra = after(out) if after is not None else None
     head, details = message_texts(out, extra)
@@ -1322,7 +1526,8 @@ def extract_after(ctx, caps):
                 refused = "cannot write %s: %s" % (target, e)
             else:
                 lvsjob.name_netlist(out, target)
-                show_text("Magic's netlist of %s: %s" % (ctx.cell.name, target), text, name="kmp_netlist")
+                show_text("Magic's netlist of %s: %s" % (ctx.cell.name, target), text, name="kmp_netlist",
+                          on_close=raise_browser)
                 return "Netlist: %s" % target
             start_at = _free_name(target)
             note = "Not written: %s." % refused
@@ -1333,7 +1538,8 @@ def extract_after(ctx, caps):
             ask = " Choose a file in the dialog."
         # The summary names no file: the netlist was not written.
         lvsjob.unname_netlist(out)
-        show_text("Magic's netlist of %s (not saved)" % ctx.cell.name, text, name="kmp_netlist")
+        show_text("Magic's netlist of %s (not saved)" % ctx.cell.name, text, name="kmp_netlist",
+                  on_close=raise_browser)
         if not has_qt():
             return note
         # The dialog reads the job directory's netlist: release it when the dialog closes.
@@ -1365,18 +1571,28 @@ def on_lvs():
     else:
         raise UserError("LVS needs a schematic; choose it in the GUI first.")
 
-    start(ctx, "lvs", [ctx.cell], {"cmd": "lvs", "schematic": opts["schematic"],
-                                   "schematic_cell": opts["subckt"], "file": ctx.file}, after=lvs_after)
+    cell, schematic, subckt = ctx.cell.name, opts["schematic"], opts["subckt"]
+    start(ctx, "lvs", [ctx.cell], {"cmd": "lvs", "schematic": schematic,
+                                   "schematic_cell": subckt, "file": ctx.file},
+          after=lambda out: lvs_after(out, cell, schematic, subckt))
 
 
-def lvs_after(out):
+def report_title(cell, schematic, subckt):
+    """The title of netgen's report window: what was compared, not the
+    report's file, which is in the job cache and goes when the check ends."""
+    return "netgen's report: %s against %s in %s" % (cell, subckt, os.path.basename(schematic or ""))
+
+
+def lvs_after(out, cell=None, schematic=None, subckt=None):
     """What LVS does with its outcome: netgen's report in a window, scrolled
-    to its end, where netgen's final result is. The window's title names the
-    file, which goes with the job directory (jobs.release) unless
-    KMP_JOB_KEEP=1; the message gets no line, so it names no cache path."""
+    to its end, where netgen's final result is. Neither the window's title
+    nor the message names the report's file in the job cache."""
     report = out.files.get("report")
     if report:
-        show_text("netgen's report: %s" % report, _read(report), name="kmp_lvs_report", at_end=True)
+        # Closing the report gives the focus back to the main window, which
+        # would then cover the browser.
+        show_text(report_title(cell or "?", schematic, subckt or "?"), _read(report), name="kmp_lvs_report",
+                  at_end=True, on_close=raise_browser)
     return None
 
 

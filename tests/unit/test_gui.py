@@ -445,10 +445,15 @@ class ResultMessages(unittest.TestCase):
             report = os.path.join(d, "lvs.out")
             with open(report, "w") as f:
                 f.write("...\nFinal result: Circuits match uniquely.\n")
-            self.assertIsNone(gui.lvs_after(types.SimpleNamespace(files={"report": report})))
+            self.assertIsNone(gui.lvs_after(types.SimpleNamespace(files={"report": report}), "inv_gen_ref",
+                                            "/w/spice/my_inv_gen_sch.spice", "my_inv_gen"))
             (args, kw), = shown
             self.assertTrue(kw.get("at_end"))
             self.assertIn("Final result", args[1])
+            # The title says what was compared; the report's file is in the
+            # job cache and goes when the check ends.
+            self.assertEqual(args[0], "netgen's report: inv_gen_ref against my_inv_gen in my_inv_gen_sch.spice")
+            self.assertNotIn(d, args[0])
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
@@ -460,6 +465,64 @@ class Windows(unittest.TestCase):
         self.assertEqual(gui.fit_size((1100, 760), (1280, 769)), (1100, 699))
         self.assertEqual(gui.fit_size((1100, 760), (1920, 1050)), (1100, 760))
         self.assertEqual(gui.fit_size((1100, 760), None), (1100, 760))
+
+    def test_the_directory_pane_leaves_the_width_to_the_info_pane(self):
+        """Maximised at 1280 x 800, KLayout gave the Directory pane about
+        1000 px and the Markers and Info side about 270."""
+        self.assertEqual(gui.fit_splitter([990, 270]), [gui.DIRECTORY_WIDTH, 960])
+        self.assertEqual(gui.fit_splitter([200, 340]), [200, 340])
+        self.assertEqual(gui.fit_splitter([500]), [500])
+
+    def test_place_browser_restores_and_moves_it_below_the_menu(self):
+        """The browser keeps its maximised state for the session in KLayout,
+        and covered the Magic menu: it comes back to its normal size, below
+        the main window's menu bar."""
+        import types
+        done = []
+
+        class G:
+            def __init__(self, l, t, w, h):
+                self.left, self.top, self.width, self.height = l, t, w, h
+
+        class W:
+            objectName = "MarkerBrowserDialog"
+
+            def isVisible(self):
+                return True
+
+            def isMaximized(self):
+                return True
+
+            def showNormal(self):
+                done.append("normal")
+
+            def children(self):
+                return []
+
+            frameGeometry = G(358, 28, 544, 608)
+            geometry = G(358, 52, 544, 584)
+
+            def move(self, x, y):
+                done.append(("move", x, y))
+
+            def resize(self, w, h):
+                done.append(("resize", w, h))
+
+        class QApplication:
+            @staticmethod
+            def topLevelWidgets():
+                return [W()]
+
+        saved = gui._pya, gui._menu_bottom, gui._available_rect
+        gui._pya = lambda: types.SimpleNamespace(QApplication=QApplication)
+        gui._menu_bottom = lambda: (0, 1280, 74)
+        gui._available_rect = lambda: (0, 0, 1280, 769)
+        try:
+            gui.place_browser()
+        finally:
+            gui._pya, gui._menu_bottom, gui._available_rect = saved
+        # It fits below the menu bar as it is, so it keeps its size.
+        self.assertEqual(done, ["normal", ("move", 358, 76)])
 
     def test_extract_title_leaves_the_cell_to_the_dialog(self):
         """The window manager cut "Extract drc_02 with Magic (" at
